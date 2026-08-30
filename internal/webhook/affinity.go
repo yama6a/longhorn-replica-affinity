@@ -4,17 +4,16 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-// HostnameLabel is the node label the injected terms match on. Longhorn identifies a
-// node by this name, so its replica nodeIDs can be used verbatim.
+// HostnameLabel is what the injected terms match on. Longhorn's nodeID is this name, so
+// replica nodeIDs are usable verbatim.
 const HostnameLabel = "kubernetes.io/hostname"
 
 // MaxWeight is the ceiling the API puts on a single preferred term.
 const MaxWeight = 100
 
-// Terms builds one preferred term per distinct node, weighted by how many of the pod's
-// volumes that node holds. A node with two of them scores 2*weight, so it outranks one
-// holding a single volume. Aggregating here rather than emitting a term per volume keeps
-// the terms unique, which is what lets Merge stay idempotent.
+// Terms builds one term per distinct node, weighted by how many of the pod's volumes it
+// holds. Aggregating here rather than one term per volume keeps terms unique, which is
+// what lets Merge stay idempotent.
 func Terms(nodes []string, weight int32) []corev1.PreferredSchedulingTerm {
 	counts := map[string]int32{}
 	var order []string
@@ -48,9 +47,8 @@ func Terms(nodes []string, weight int32) []corev1.PreferredSchedulingTerm {
 	return terms
 }
 
-// Merge appends terms to a pod's soft node affinity, leaving everything else alone.
-// requiredDuringScheduling is never touched: a hard constraint the author wrote is not
-// ours to weaken, and a preference we add can only ever break a tie inside it.
+// Merge appends terms to a pod's soft node affinity. requiredDuringScheduling is never
+// touched: a constraint the author wrote is not ours to weaken.
 func Merge(in *corev1.Affinity, terms []corev1.PreferredSchedulingTerm) *corev1.Affinity {
 	if len(terms) == 0 {
 		return in

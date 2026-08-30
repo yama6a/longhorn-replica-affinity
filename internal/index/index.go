@@ -1,5 +1,5 @@
-// Package index keeps an in-memory view of Longhorn replica placement, refreshed by
-// informers. Both subcommands read from it; the admission path never calls the API.
+// Package index keeps an in-memory view of Longhorn replica placement, so the admission
+// path never calls the API server.
 package index
 
 import (
@@ -19,7 +19,6 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-// GVRs the index watches. v1beta2 is the only served version since Longhorn 1.5.
 var (
 	ReplicaGVR = schema.GroupVersionResource{Group: "longhorn.io", Version: "v1beta2", Resource: "replicas"}
 	VolumeGVR  = schema.GroupVersionResource{Group: "longhorn.io", Version: "v1beta2", Resource: "volumes"}
@@ -28,7 +27,7 @@ var (
 // ShareManagerSelector matches the nfs-ganesha pod Longhorn runs per RWX volume.
 const ShareManagerSelector = "longhorn.io/component=share-manager"
 
-// Volume is the subset of a Longhorn Volume the rest of the program acts on.
+// Volume is the subset of a Longhorn Volume this program acts on.
 type Volume struct {
 	Name         string
 	AttachedNode string
@@ -41,8 +40,7 @@ type Volume struct {
 	Restore      string
 }
 
-// RWX reports whether the volume is served through a share-manager rather than
-// attached to the consumer as a block device.
+// RWX reports whether the volume is served through a share-manager.
 func (v Volume) RWX() bool { return v.AccessMode == "rwx" }
 
 // Index answers "which nodes hold this volume" without touching the API server.
@@ -57,16 +55,13 @@ type Index struct {
 	synced bool
 }
 
-// New wires informers scoped to the Longhorn namespace. restoreKey is the annotation
-// the reconciler parks a volume's original dataLocality under.
+// New wires informers scoped to the Longhorn namespace.
 func New(dc dynamic.Interface, kc kubernetes.Interface, namespace, restoreKey string) *Index {
 	df := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dc, 0, namespace, nil)
 	kf := informers.NewSharedInformerFactoryWithOptions(kc, 0,
 		informers.WithNamespace(namespace),
 		informers.WithTweakListOptions(func(o *metav1.ListOptions) { o.LabelSelector = ShareManagerSelector }),
 	)
-	// PVCs are cluster-wide: a pod in any namespace can mount one, and the bound PV's
-	// name is the Longhorn volume name.
 	all := informers.NewSharedInformerFactory(kc, 0)
 	return &Index{
 		replicas:   df.ForResource(ReplicaGVR).Informer(),
@@ -91,16 +86,15 @@ func (i *Index) Run(ctx context.Context) error {
 	return nil
 }
 
-// Synced reports whether every cache has warmed at least once.
+// Synced reports whether every cache has warmed.
 func (i *Index) Synced() bool {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	return i.synced
 }
 
-// ReplicaNodes returns the nodes running a replica of volume, sorted. Only replicas in
-// currentState "running" count: a rebuilding or failed replica holds no usable data, so
-// preferring its node would send the pod somewhere with nothing to read.
+// ReplicaNodes returns the nodes running a replica of volume, sorted. Only "running"
+// counts: a rebuilding or failed replica has nothing to read yet.
 func (i *Index) ReplicaNodes(volume string) []string {
 	seen := map[string]struct{}{}
 	for _, obj := range i.replicas.GetStore().List() {
@@ -122,8 +116,7 @@ func (i *Index) ReplicaNodes(volume string) []string {
 }
 
 // ShareManagerNode returns the node running the share-manager for an RWX volume, or "".
-// For RWX the consumer mounts nfs-ganesha rather than a replica, so this, not
-// ReplicaNodes, is what saves the consumer a network hop.
+// The consumer mounts nfs-ganesha, so this is the hop worth saving, not ReplicaNodes.
 func (i *Index) ShareManagerNode(volume string) string {
 	for _, obj := range i.pods.GetStore().List() {
 		p, ok := obj.(*corev1.Pod)
@@ -137,9 +130,8 @@ func (i *Index) ShareManagerNode(volume string) string {
 	return ""
 }
 
-// VolumeNameForClaim resolves a PVC to the Longhorn volume backing it. Longhorn's CSI
-// volumeHandle equals the PV name, so the bound PV name is the volume name and no PV
-// lookup is needed.
+// VolumeNameForClaim resolves a PVC to its Longhorn volume. Longhorn's CSI volumeHandle
+// equals the PV name, so no PV lookup is needed.
 func (i *Index) VolumeNameForClaim(namespace, name string) (string, bool) {
 	obj, ok, err := i.pvcs.GetStore().GetByKey(namespace + "/" + name)
 	if err != nil || !ok {
@@ -212,8 +204,8 @@ func nestedString(u *unstructured.Unstructured, fields ...string) string {
 	return s
 }
 
-// nestedInt tolerates both a JSON number and a quoted string: Longhorn writes actualSize
-// as an int64 but size as a string, and the CRD schema has changed shape across releases.
+// nestedInt tolerates a JSON number or a quoted string: Longhorn writes actualSize as an
+// int64 but size as a string.
 func nestedInt(u *unstructured.Unstructured, fields ...string) int64 {
 	val, found, err := unstructured.NestedFieldNoCopy(u.Object, fields...)
 	if !found || err != nil {

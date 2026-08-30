@@ -1,11 +1,11 @@
 name: release
 
-# A merged PR is itself a push to main, so this covers both cases.
 on:
   push:
     branches: [main]
 
-# Two merges landing together would otherwise race for the same tag.
+# Serialised so two runs cannot tag the same version. A cancelled run here loses nothing:
+# the next one recomputes the bump from every PR merged since the last release.
 concurrency:
   group: release
   cancel-in-progress: false
@@ -22,43 +22,56 @@ jobs:
         with:
           fetch-depth: 0
 
-      # The bump comes from the merged PR's label. A direct push to main has no PR and
-      # therefore no label, so it ships no release rather than guessing.
-      - name: Resolve bump from the merged PR
+      # Every PR merged since the last release, not just the one that triggered this run.
+      # A concurrency group queues only ONE pending run, so a burst of merges silently
+      # cancels the runs in between; deriving the bump from the whole backlog means the
+      # next run absorbs whatever was dropped instead of losing those releases.
+      - name: Resolve bump since the last release
         id: bump
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          labels=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SHA}/pulls" \
-            --jq '.[0].labels[]?.name' 2>/dev/null || true)
-          if [ -z "$labels" ]; then
-            echo "no PR labels for ${SHA}, skipping release"
-            echo "kind=none" >> "$GITHUB_OUTPUT"
-            exit 0
+          latest=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // ""')
+          if [ -n "$latest" ]; then
+            range="${latest}..HEAD"
+          else
+            range="HEAD"
           fi
-          kind=$(grep -x -E 'patch|minor|major|skip-release' <<<"$labels" | head -1 || true)
-          echo "labels: ${labels//$'\n'/, } -> ${kind:-none}"
-          echo "kind=${kind:-none}" >> "$GITHUB_OUTPUT"
+
+          labels=""
+          for sha in $(git rev-list "$range"); do
+            labels+=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${sha}/pulls" \
+              --jq '.[0].labels[]?.name' 2>/dev/null || true)$'\n'
+          done
+
+          # Strongest bump in the batch wins. skip-release only suppresses when nothing
+          # else in the backlog asked for a release.
+          kind=none
+          for want in patch minor major; do
+            grep -qx "$want" <<<"$labels" && kind=$want
+          done
+
+          echo "since ${latest:-<start>}: $(grep -c . <<<"$labels" || true) labels -> ${kind}"
+          echo "latest=${latest:-v0.0.0}" >> "$GITHUB_OUTPUT"
+          echo "kind=${kind}" >> "$GITHUB_OUTPUT"
 
       - name: Compute next version
         id: version
-        if: steps.bump.outputs.kind != 'none' && steps.bump.outputs.kind != 'skip-release'
+        if: steps.bump.outputs.kind != 'none'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           KIND: ${{ steps.bump.outputs.kind }}
+          LATEST: ${{ steps.bump.outputs.latest }}
         run: |
           set -euo pipefail
-          latest=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // "v0.0.0"')
-          IFS=. read -r major minor patch <<<"${latest#v}"
+          IFS=. read -r major minor patch <<<"${LATEST#v}"
           case "$KIND" in
             major) major=$((major + 1)); minor=0; patch=0 ;;
             minor) minor=$((minor + 1)); patch=0 ;;
             patch) patch=$((patch + 1)) ;;
           esac
           next="v${major}.${minor}.${patch}"
-          echo "${latest} + ${KIND} -> ${next}"
+          echo "${LATEST} + ${KIND} -> ${next}"
           echo "version=${next}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
@@ -82,13 +95,13 @@ jobs:
           platforms: linux/amd64,linux/arm64 # a manifest list, one image per arch
           push: true
           build-args: VERSION=${{ steps.version.outputs.version }}
-          # No floating :latest tag on purpose. This runs in the admission path, and a
-          # tag that moves under a cluster is the wrong kind of surprise there.
+          # No :latest on purpose: this runs in the admission path, where a tag that moves
+          # under a cluster is the wrong kind of surprise.
           tags: ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Only tag once the image is actually pushed, so a tag always has an image.
+      # Tag only after the push, so a tag always has an image.
       - name: Create GitHub release
         if: steps.version.outputs.version != ''
         env:

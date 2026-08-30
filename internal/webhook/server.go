@@ -36,8 +36,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	if err := s.loadCert(); err != nil {
 		return err
 	}
-	// cert-manager rotates the Secret in place and the kubelet updates the mounted files
-	// without restarting the pod, so a cert read once at boot goes stale.
+	// cert-manager rotates the Secret in place without restarting the pod.
 	go s.watchCert(ctx)
 
 	mux := http.NewServeMux()
