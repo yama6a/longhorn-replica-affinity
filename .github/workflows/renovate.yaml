@@ -36,7 +36,7 @@ jobs:
   renovate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: restore renovate cache
         id: cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -49,7 +49,7 @@ jobs:
         # actions/cache restores as the runner user, renovate reads it as uid 12021 inside its container, and an
         # unreadable cache is silently treated as absent.
         run: sudo chown -R 12021:0 /tmp/renovate/
-      - uses: renovatebot/github-action@v46.2.1
+      - uses: renovatebot/github-action@5402b206248e5a8c8427a15102702eb9c1793efc # v46.2.4
         with:
           # A dedicated PAT: GITHUB_TOKEN cannot open PRs that re-trigger workflows, and lacks the scope.
           token: ${{ secrets.RENOVATE_TOKEN }}
