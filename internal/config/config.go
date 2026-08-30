@@ -42,6 +42,7 @@ type Config struct {
 	ReconcileInterval time.Duration
 	Dwell             time.Duration
 	MaxMoveBytes      int64
+	MaxBorrow         time.Duration
 	FlipDataLocality  bool
 }
 
@@ -96,6 +97,11 @@ func Load() (Config, error) {
 		return c, err
 	}
 	if c.MaxMoveBytes, err = envInt64("LRA_MAX_MOVE_BYTES", 5<<30); err != nil {
+		return c, err
+	}
+	// Backstop: a volume Longhorn never trims back would otherwise pin best-effort on
+	// forever, which is the volume-follows-pod behaviour the borrow exists to avoid.
+	if c.MaxBorrow, err = envDuration("LRA_MAX_BORROW", time.Hour); err != nil {
 		return c, err
 	}
 	if c.FlipDataLocality, err = envBool("LRA_FLIP_DATA_LOCALITY", true); err != nil {

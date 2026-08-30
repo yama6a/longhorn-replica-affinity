@@ -84,7 +84,8 @@ func run(t *testing.T, store Store, pods []*corev1.Pod, tweak func(*Reconciler))
 	r := &Reconciler{
 		Cfg: config.Config{
 			LabelKey: "longhorn-replica-affinity/enabled", LabelValue: "true",
-			LonghornNamespace: ns, Dwell: time.Hour, MaxMoveBytes: 5 << 30, FlipDataLocality: true,
+			LonghornNamespace: ns, Dwell: time.Hour, MaxMoveBytes: 5 << 30,
+			MaxBorrow: time.Hour, FlipDataLocality: true,
 		},
 		Index: store,
 		Kube:  fake.NewClientset(objs...),
@@ -192,7 +193,8 @@ func TestRestoresOnceReplicaIsLocal(t *testing.T) {
 	v := misplaced()
 	v.DataLocality = bestEffort
 	v.Restore = "disabled"
-	patches := run(t, store(v, "tc-w1"), []*corev1.Pod{labelledPod("plex-1")}, nil)
+	v.WantReplicas = 2
+	patches := run(t, store(v, "tc-w1", "pi-cp1"), []*corev1.Pod{labelledPod("plex-1")}, nil)
 	if len(patches) != 1 {
 		t.Fatalf("want 1 restore patch, got %d", len(patches))
 	}
@@ -211,7 +213,8 @@ func TestRestoreKeepsNonDefaultOriginal(t *testing.T) {
 	v := misplaced()
 	v.DataLocality = bestEffort
 	v.Restore = bestEffort
-	patches := run(t, store(v, "tc-w1"), []*corev1.Pod{labelledPod("plex-1")}, nil)
+	v.WantReplicas = 2
+	patches := run(t, store(v, "tc-w1", "pi-cp1"), []*corev1.Pod{labelledPod("plex-1")}, nil)
 	if len(patches) != 1 || patches[0].Spec.DataLocality != bestEffort {
 		t.Fatalf("want best-effort restored, got %v", patches)
 	}
@@ -249,6 +252,76 @@ func TestNeverMovesAnRWXVolume(t *testing.T) {
 		func(r *Reconciler) { r.since = map[string]time.Time{"pvc-rwx": time.Now().Add(-2 * time.Hour)} })
 	if len(patches) != 0 {
 		t.Fatalf("an rwx volume must never be copied, got %v", patches)
+	}
+}
+
+func borrowed() index.Volume {
+	v := misplaced()
+	v.DataLocality = bestEffort
+	v.Restore = "disabled"
+	v.WantReplicas = 2
+	return v
+}
+
+func TestDoesNotRestoreWhileOverReplicated(t *testing.T) {
+	t.Parallel()
+	// Longhorn adds the local replica, rebuilds, and only THEN drops a remote one.
+	// Restoring in that gap leaves the volume permanently at 3 of 2.
+	patches := run(t, store(borrowed(), "tc-w1", "pi-cp1", "pi-cp3"), []*corev1.Pod{labelledPod("plex-1")}, nil)
+	if len(patches) != 0 {
+		t.Fatalf("must wait for Longhorn to trim the surplus, got %v", patches)
+	}
+}
+
+func TestRestoresOnceTrimmed(t *testing.T) {
+	t.Parallel()
+	patches := run(t, store(borrowed(), "tc-w1", "pi-cp1"), []*corev1.Pod{labelledPod("plex-1")}, nil)
+	if len(patches) != 1 || patches[0].Spec.DataLocality != "disabled" {
+		t.Fatalf("want a restore once back at numberOfReplicas, got %v", patches)
+	}
+}
+
+func TestDoesNotRestoreWhileStillRemote(t *testing.T) {
+	t.Parallel()
+	// Rebuild has not produced a local replica yet.
+	patches := run(t, store(borrowed(), "pi-cp1", "pi-cp3"), []*corev1.Pod{labelledPod("plex-1")}, nil)
+	if len(patches) != 0 {
+		t.Fatalf("no local replica yet, got %v", patches)
+	}
+}
+
+func TestBackstopRestoresAfterMaxBorrow(t *testing.T) {
+	t.Parallel()
+	// Holding best-effort forever would drag a copy on every future reschedule, which is
+	// worse than one surplus replica.
+	patches := run(t, store(borrowed(), "tc-w1", "pi-cp1", "pi-cp3"), []*corev1.Pod{labelledPod("plex-1")},
+		func(r *Reconciler) {
+			r.borrowed = map[string]time.Time{"pvc-1": time.Now().Add(-2 * time.Hour)}
+		})
+	if len(patches) != 1 {
+		t.Fatalf("backstop should restore despite the surplus, got %v", patches)
+	}
+}
+
+func TestBackstopNotTrippedEarly(t *testing.T) {
+	t.Parallel()
+	patches := run(t, store(borrowed(), "tc-w1", "pi-cp1", "pi-cp3"), []*corev1.Pod{labelledPod("plex-1")},
+		func(r *Reconciler) {
+			r.borrowed = map[string]time.Time{"pvc-1": time.Now().Add(-5 * time.Minute)}
+		})
+	if len(patches) != 0 {
+		t.Fatalf("well inside MaxBorrow, got %v", patches)
+	}
+}
+
+func TestUnknownWantReplicasDoesNotBlockRestore(t *testing.T) {
+	t.Parallel()
+	// A volume whose spec we could not read must not pin best-effort on forever.
+	v := borrowed()
+	v.WantReplicas = 0
+	patches := run(t, store(v, "tc-w1", "pi-cp1", "pi-cp3"), []*corev1.Pod{labelledPod("plex-1")}, nil)
+	if len(patches) != 1 {
+		t.Fatalf("want a restore when the replica count is unknown, got %v", patches)
 	}
 }
 
