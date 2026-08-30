@@ -21,6 +21,15 @@ weight: 30
 # replica and the share-manager's node is the only placement that saves it a hop. Set true to ignore RWX.
 skipRWX: false
 
+shareManager:
+  # Also place Longhorn's own share-manager pod onto a node holding a replica of the volume it serves. That
+  # removes the second RWX hop (share-manager to replica) for every consumer at once, by moving one pod
+  # rather than copying the volume.
+  #
+  # Adds a webhook entry scoped to longhorn-system AND the share-manager label, so the apiserver never calls
+  # this for any other Longhorn pod. failurePolicy still applies, so a broken webhook cannot wedge storage.
+  enabled: true
+
 longhornNamespace: longhorn-system
 logLevel: info
 metricsPort: 9100

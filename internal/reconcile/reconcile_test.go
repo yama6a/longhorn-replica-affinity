@@ -237,6 +237,21 @@ func TestDwellResetsWhenVolumeBecomesLocal(t *testing.T) {
 	}
 }
 
+func TestNeverMovesAnRWXVolume(t *testing.T) {
+	t.Parallel()
+	// The share-manager moves to the data; the data never moves to the share-manager.
+	rwx := index.Volume{
+		Name: "pvc-rwx", AttachedNode: "tc-w1", DataLocality: "disabled", AccessMode: "rwx",
+		ActualSize: 1 << 20, Namespace: "media", PVCName: "media-downloads",
+		PodNames: []string{"qbittorrent-1"},
+	}
+	patches := run(t, store(rwx, "pi-cp1", "pi-cp3"), []*corev1.Pod{labelledPod("qbittorrent-1")},
+		func(r *Reconciler) { r.since = map[string]time.Time{"pvc-rwx": time.Now().Add(-2 * time.Hour)} })
+	if len(patches) != 0 {
+		t.Fatalf("an rwx volume must never be copied, got %v", patches)
+	}
+}
+
 func TestForgetsVanishedVolumes(t *testing.T) {
 	t.Parallel()
 	r := &Reconciler{

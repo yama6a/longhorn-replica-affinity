@@ -13,11 +13,12 @@ import (
 
 // Decision records what a single admission produced, for logging and metrics.
 type Decision struct {
-	Namespace string
-	Pod       string
-	Nodes     []string
-	Volumes   int
-	Skipped   string
+	Namespace    string
+	Pod          string
+	Nodes        []string
+	Volumes      int
+	ShareManager bool
+	Skipped      string
 }
 
 // Lookup is the slice of the index the admission path needs, as an interface so the
@@ -66,6 +67,19 @@ func (a *Admitter) Review(req *admissionv1.AdmissionRequest) (*admissionv1.Admis
 		return resp, d
 	}
 
+	// A share-manager is itself a pod, so the RWX hop from it to its replicas is fixed by
+	// moving it, not by dragging the volume to it.
+	if index.IsShareManager(podName(&pod, req)) {
+		d.ShareManager = true
+		nodes := a.Index.ReplicaNodes(index.VolumeForShareManager(podName(&pod, req)))
+		d.Nodes, d.Volumes = nodes, len(nodes)
+		if len(nodes) == 0 {
+			d.Skipped = "no-local-replica"
+			return resp, d
+		}
+		return a.patch(resp, &pod, nodes, &d), d
+	}
+
 	nodes, matched := a.targets(&pod, req.Namespace)
 	d.Nodes, d.Volumes = nodes, matched
 	if len(nodes) == 0 {
@@ -75,6 +89,10 @@ func (a *Admitter) Review(req *admissionv1.AdmissionRequest) (*admissionv1.Admis
 		return resp, d
 	}
 
+	return a.patch(resp, &pod, nodes, &d), d
+}
+
+func (a *Admitter) patch(resp *admissionv1.AdmissionResponse, pod *corev1.Pod, nodes []string, d *Decision) *admissionv1.AdmissionResponse {
 	merged := Merge(pod.Spec.Affinity, Terms(nodes, a.Weight))
 	patch, err := json.Marshal([]map[string]any{{
 		"op":    "add",
@@ -84,13 +102,24 @@ func (a *Admitter) Review(req *admissionv1.AdmissionRequest) (*admissionv1.Admis
 	if err != nil {
 		a.Log.Error("marshal patch", "err", err)
 		d.Skipped = "patch"
-		return resp, d
+		return resp
 	}
-
 	pt := admissionv1.PatchTypeJSONPatch
 	resp.Patch = patch
 	resp.PatchType = &pt
-	return resp, d
+	return resp
+}
+
+// podName prefers the object's own name, falling back to the request's for a pod the
+// controller named but has not stamped into the object yet.
+func podName(pod *corev1.Pod, req *admissionv1.AdmissionRequest) string {
+	if pod.Name != "" {
+		return pod.Name
+	}
+	if req.Name != "" {
+		return req.Name
+	}
+	return pod.GenerateName
 }
 
 // targets returns one entry per volume per node. Repeats are deliberate: Terms weights a

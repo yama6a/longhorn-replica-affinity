@@ -115,6 +115,7 @@ jobs:
             "provided + own secret|--set tls.mode=provided --set tls.secretName=my-tls"
             "reconciler off|--set reconciler.enabled=false"
             "podMonitor on|--set podMonitor.enabled=true"
+            "share-manager off|--set shareManager.enabled=false"
             "fullnameOverride|--set fullnameOverride=lra-custom"
           )
           fail=0

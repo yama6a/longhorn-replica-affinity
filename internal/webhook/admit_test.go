@@ -258,6 +258,87 @@ func TestReviewSkipsPreScheduledPod(t *testing.T) {
 	}
 }
 
+func shareManagerLookup() fakeLookup {
+	return fakeLookup{
+		synced:   true,
+		replicas: map[string][]string{"pvc-rwx": {"pi-cp2", "pi-cp3"}},
+	}
+}
+
+func namedReview(t *testing.T, pod *corev1.Pod, ns, name string) *admissionv1.AdmissionRequest {
+	t.Helper()
+	r := review(t, pod, ns)
+	r.Name = name
+	return r
+}
+
+func TestShareManagerMovesToItsReplicas(t *testing.T) {
+	t.Parallel()
+	// The share-manager is a pod, so the rwx hop from it to its replicas is fixed by
+	// moving IT, never by copying the volume to wherever it happens to be.
+	a := newAdmitter(shareManagerLookup(), false)
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "share-manager-pvc-rwx"}}
+	resp, d := a.Review(review(t, pod, "longhorn-system"))
+	if !d.ShareManager {
+		t.Fatal("pod was not recognised as a share-manager")
+	}
+	got := patchedHostnames(t, resp)
+	if len(got) != 2 || got[0] != "pi-cp2" || got[1] != "pi-cp3" {
+		t.Fatalf("want the volume's replica nodes, got %v", got)
+	}
+}
+
+func TestShareManagerNeedsNoPVCInItsSpec(t *testing.T) {
+	t.Parallel()
+	// Longhorn does not give the share-manager a PVC; the volume comes from its name.
+	a := newAdmitter(shareManagerLookup(), false)
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "share-manager-pvc-rwx"}}
+	if len(pod.Spec.Volumes) != 0 {
+		t.Fatal("test pod should have no volumes")
+	}
+	resp, _ := a.Review(review(t, pod, "longhorn-system"))
+	if resp.Patch == nil {
+		t.Fatal("share-manager must still be placed")
+	}
+}
+
+func TestShareManagerNameFromRequestWhenObjectUnnamed(t *testing.T) {
+	t.Parallel()
+	a := newAdmitter(shareManagerLookup(), false)
+	pod := &corev1.Pod{} // controller has not stamped the name into the object yet
+	resp, d := a.Review(namedReview(t, pod, "longhorn-system", "share-manager-pvc-rwx"))
+	if !d.ShareManager || resp.Patch == nil {
+		t.Fatal("the request name should identify the share-manager")
+	}
+}
+
+func TestShareManagerWithoutReplicasIsNotPatched(t *testing.T) {
+	t.Parallel()
+	a := newAdmitter(fakeLookup{synced: true}, false)
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "share-manager-pvc-rwx"}}
+	resp, d := a.Review(review(t, pod, "longhorn-system"))
+	if resp.Patch != nil {
+		t.Fatal("nothing to prefer without replicas")
+	}
+	if d.Skipped != "no-local-replica" {
+		t.Fatalf("want no-local-replica, got %q", d.Skipped)
+	}
+}
+
+func TestOrdinaryPodIsNotTreatedAsShareManager(t *testing.T) {
+	t.Parallel()
+	a := newAdmitter(rwoLookup(), false)
+	pod := podWithClaims("config")
+	pod.Name = "sonarr-yama-abc123"
+	resp, d := a.Review(review(t, pod, "media"))
+	if d.ShareManager {
+		t.Fatal("an ordinary pod must go down the PVC path")
+	}
+	if len(patchedHostnames(t, resp)) != 2 {
+		t.Fatal("its own PVC replicas should still have been used")
+	}
+}
+
 func TestReviewEchoesUID(t *testing.T) {
 	t.Parallel()
 	a := newAdmitter(rwoLookup(), false)
