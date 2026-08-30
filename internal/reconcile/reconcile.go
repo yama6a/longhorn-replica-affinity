@@ -41,8 +41,9 @@ type Reconciler struct {
 	Kube  kubernetes.Interface
 	Log   *slog.Logger
 
-	since map[string]time.Time
-	now   func() time.Time // swapped in tests to step over the dwell window
+	since    map[string]time.Time
+	borrowed map[string]time.Time // when each in-flight borrow started, for the backstop
+	now      func() time.Time     // swapped in tests to step over the dwell window
 }
 
 // Run reconciles on a ticker until ctx is cancelled.
@@ -64,6 +65,9 @@ func (r *Reconciler) init() {
 	if r.since == nil {
 		r.since = map[string]time.Time{}
 	}
+	if r.borrowed == nil {
+		r.borrowed = map[string]time.Time{}
+	}
 	if r.now == nil {
 		r.now = time.Now
 	}
@@ -81,11 +85,13 @@ func (r *Reconciler) pass(ctx context.Context) {
 		isLocal := slices.Contains(r.Index.ReplicaNodes(v.Name), v.AttachedNode)
 		metrics.SetLocal(v.Namespace, v.PVCName, v.AttachedNode, v.AccessMode, isLocal)
 
+		if v.Restore != "" {
+			r.considerRestore(ctx, v, isLocal, len(r.Index.ReplicaNodes(v.Name)))
+			delete(r.since, v.Name)
+			continue
+		}
 		if isLocal {
 			delete(r.since, v.Name)
-			if v.Restore != "" {
-				r.restore(ctx, v)
-			}
 			continue
 		}
 		r.considerBorrow(ctx, v)
@@ -144,19 +150,44 @@ func (r *Reconciler) considerBorrow(ctx context.Context, v index.Volume) {
 		r.Log.Error("borrow dataLocality", "volume", v.Name, "err", err)
 		return
 	}
+	r.borrowed[v.Name] = r.now()
 	metrics.Flip("borrow")
 	r.Log.Info("borrowing dataLocality to pull a replica local",
 		"volume", v.Name, "pvc", v.Namespace+"/"+v.PVCName,
 		"node", v.AttachedNode, "bytes", v.ActualSize, "restore_to", v.DataLocality)
 }
 
-func (r *Reconciler) restore(ctx context.Context, v index.Volume) {
+// considerRestore ends a borrow, but only once Longhorn has finished the whole
+// best-effort cycle. It adds the local replica, rebuilds it, and only THEN deletes a
+// remote one to get back to numberOfReplicas. Restoring between those last two steps
+// leaves the volume permanently over-replicated, because a volume on dataLocality
+// disabled gives Longhorn no reason to trim.
+func (r *Reconciler) considerRestore(ctx context.Context, v index.Volume, isLocal bool, have int) {
+	held := time.Duration(0)
+	if started, ok := r.borrowed[v.Name]; ok {
+		held = r.now().Sub(started)
+	}
+	overReplicated := v.WantReplicas > 0 && have > v.WantReplicas
+
+	switch {
+	case isLocal && !overReplicated:
+	case held > r.Cfg.MaxBorrow:
+		// Give up waiting rather than leave best-effort on: that would drag a copy on
+		// every future reschedule, which is worse than one surplus replica.
+		r.Log.Warn("borrow held too long, restoring anyway",
+			"volume", v.Name, "pvc", v.Namespace+"/"+v.PVCName,
+			"local", isLocal, "replicas", have, "want", v.WantReplicas, "held", held.String())
+	default:
+		return // still rebuilding, or Longhorn has not trimmed the surplus yet
+	}
+
 	if err := r.patch(ctx, v.Name, v.Restore, ""); err != nil {
 		r.Log.Error("restore dataLocality", "volume", v.Name, "err", err)
 		return
 	}
+	delete(r.borrowed, v.Name)
 	metrics.Flip("restore")
-	r.Log.Info("replica is local, dataLocality restored",
+	r.Log.Info("replica is local and replica count is back to normal, dataLocality restored",
 		"volume", v.Name, "pvc", v.Namespace+"/"+v.PVCName, "value", v.Restore)
 }
 

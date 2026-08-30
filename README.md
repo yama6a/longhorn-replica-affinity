@@ -67,15 +67,20 @@ cannot move to their data. The opt-in label is the test: a labelled pod still of
 means the preference lost to something hard.
 
 1. Park the volume's `dataLocality` in an annotation.
-2. Set `best-effort`. Longhorn rebuilds a replica onto the pod's node.
-3. Once it is running, restore the parked value and clear the annotation.
+2. Set `best-effort`. Longhorn adds a local replica, rebuilds it, then drops a remote one.
+3. Once the replica is local **and** the count is back to `numberOfReplicas`, restore the parked value.
 
 Step 3 is the point. Leaving `best-effort` on would drag a copy on every future
 reschedule. Restoring the parked value rather than a default keeps a volume whose
 StorageClass asked for `best-effort` on `best-effort`. The annotation is on the object, so
 a restart mid-flip still restores correctly.
 
-Guarded by `LRA_DWELL` and `LRA_MAX_MOVE_BYTES`.
+Step 3 waits for the whole cycle. Restoring between the rebuild and the trim leaves the
+volume permanently over-replicated, because `dataLocality: disabled` gives Longhorn no
+reason to drop the surplus. `LRA_MAX_BORROW` is the backstop: past it, restore anyway,
+since holding `best-effort` forever is worse than one extra replica.
+
+Guarded by `LRA_DWELL`, `LRA_MAX_MOVE_BYTES` and `LRA_MAX_BORROW`.
 
 ## Install
 
@@ -191,6 +196,7 @@ recreated.
 | `LRA_NAMESPACE` | | `self-signed` mode, required; set it from `fieldRef` `metadata.namespace` |
 | `LRA_RECONCILE_INTERVAL` | `1m` | reconciler tick |
 | `LRA_DWELL` | `30m` | how long a pod sits off its data before the data moves |
+| `LRA_MAX_BORROW` | `1h` | give up waiting for Longhorn to trim the surplus replica and restore anyway |
 | `LRA_MAX_MOVE_BYTES` | `5368709120` | never move a volume larger than this (actual, not provisioned) |
 | `LRA_FLIP_DATA_LOCALITY` | `true` | false makes `reconcile` observe-only |
 | `LRA_LOG_LEVEL` | `info` | `debug` logs every skipped admission |

@@ -73,6 +73,10 @@ reconciler:
   intervalSeconds: 60
   # Long enough that a rolling update or a node drain never triggers a copy.
   dwell: 30m
+  # How long to hold the borrow while waiting for Longhorn to finish: it adds the local replica, rebuilds it,
+  # and only then drops a remote one. Restoring in that gap leaves the volume permanently over-replicated.
+  # After this, restore anyway: holding best-effort is worse than one surplus replica.
+  maxBorrow: 1h
   # Actual (thin) size, not the provisioned ceiling.
   maxMoveBytes: 5368709120 # 5Gi
   podAnnotations: {}

@@ -49,6 +49,7 @@ type Volume struct {
 	DataLocality string
 	AccessMode   string
 	ActualSize   int64
+	WantReplicas int
 	Namespace    string
 	PVCName      string
 	PodNames     []string
@@ -196,6 +197,7 @@ func toVolume(u *unstructured.Unstructured, restoreKey string) Volume {
 		DataLocality: nestedString(u, "spec", "dataLocality"),
 		AccessMode:   nestedString(u, "spec", "accessMode"),
 		ActualSize:   nestedInt(u, "status", "actualSize"),
+		WantReplicas: int(nestedInt(u, "spec", "numberOfReplicas")),
 		Namespace:    nestedString(u, "status", "kubernetesStatus", "namespace"),
 		PVCName:      nestedString(u, "status", "kubernetesStatus", "pvcName"),
 		Restore:      u.GetAnnotations()[restoreKey],
