@@ -1,0 +1,69 @@
+{{- if .Values.reconciler.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lra.reconcilerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lra.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reconciler
+spec:
+  replicas: 1 # the dwell timers are in memory, so a second replica would keep its own and act early
+  revisionHistoryLimit: 0
+  strategy:
+    type: Recreate # never two of them patching the same volume during a roll
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "lra.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: reconciler
+  template:
+    metadata:
+      labels:
+        {{- include "lra.labels" . | nindent 8 }}
+        app.kubernetes.io/component: reconciler
+      {{- with .Values.reconciler.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "lra.reconcilerName" . }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.reconciler.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.reconciler.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: reconciler
+          image: {{ include "lra.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["reconcile"]
+          env:
+            - {name: LRA_LABEL_KEY, value: {{ .Values.labelKey | quote }}}
+            - {name: LRA_LABEL_VALUE, value: {{ .Values.labelValue | quote }}}
+            - {name: LRA_LONGHORN_NAMESPACE, value: {{ .Values.longhornNamespace | quote }}}
+            - {name: LRA_METRICS_LISTEN, value: ":{{ .Values.metricsPort }}"}
+            - {name: LRA_RECONCILE_INTERVAL, value: "{{ .Values.reconciler.intervalSeconds }}s"}
+            - {name: LRA_DWELL, value: {{ .Values.reconciler.dwell | quote }}}
+            - {name: LRA_MAX_MOVE_BYTES, value: {{ .Values.reconciler.maxMoveBytes | quote }}}
+            - {name: LRA_LOG_LEVEL, value: {{ .Values.logLevel | quote }}}
+            # The reconciler never serves TLS, so it needs no certificate of its own.
+            - {name: LRA_TLS_MODE, value: "provided"}
+          ports:
+            - {name: metrics, containerPort: {{ .Values.metricsPort }}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources: {{ .Values.resources | toYaml | nindent 12 }}
+{{- end }}

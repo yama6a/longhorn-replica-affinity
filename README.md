@@ -51,39 +51,85 @@ Guarded by `LRA_DWELL` and `LRA_MAX_MOVE_BYTES`.
 
 ## Install
 
-Needs a TLS serving cert; cert-manager with a self-signed `Issuer` plus
-`cert-manager.io/inject-ca-from` is the fewest moving parts.
+```bash
+helm install longhorn-replica-affinity \
+  oci://ghcr.io/yama6a/charts/longhorn-replica-affinity \
+  --namespace longhorn-replica-affinity --create-namespace
+```
 
-Two Deployments off one image, so their RBAC can differ:
+The chart ships at the same version as the image and defaults to it, so the two can never
+drift. No dependencies: TLS is self-bootstrapped (see below).
+
+It deploys two workloads with separate RBAC, because only one of them writes:
 
 | | replicas | RBAC |
 |---|---|---|
-| `webhook` | 2 | read pods, PVCs, `replicas.longhorn.io`, `volumes.longhorn.io` |
-| `reconcile` | 1 | those reads, plus `patch` on `volumes.longhorn.io` |
+| webhook | 2 | read pods, PVCs, `replicas.longhorn.io`, `volumes.longhorn.io` |
+| reconciler | 1 | those reads, plus `patch` on `volumes.longhorn.io` |
 
-The reconciler holds dwell timers in memory, so run one.
+The reconciler holds dwell timers in memory, so run one. Disable it with
+`reconciler.enabled=false` if you only want the scheduling half.
+
+The chart ships no NetworkPolicy. Bring your own to match whatever your cluster enforces;
+the webhook needs ingress from the API server on 8443 and egress to DNS and the API server.
+
+## TLS
+
+The API server only ever calls a mutating webhook over HTTPS and has to trust the
+certificate, so a serving cert and a published `caBundle` are not optional. Two ways to
+get them.
+
+### self-signed (default)
+
+The webhook mints its own CA and leaf on startup, stores them in a Secret so every replica
+and every restart agree, and patches the CA into this chart's
+`MutatingWebhookConfiguration`. Rotation happens in-process 90 days before expiry.
+Nothing else is required.
+
+The cost is RBAC: the pod holds `get`/`patch` on one named
+`mutatingwebhookconfigurations` and `get`/`update` on one named Secret. Both are scoped
+with `resourceNames`, but it is still a cluster-scoped write on an admission object.
+
+**With ArgoCD**, the pod writing `caBundle` will fight `selfHeal`, so tell Argo to ignore it:
 
 ```yaml
-image: ghcr.io/yama6a/longhorn-replica-affinity:v0.1.0
+ignoreDifferences:
+  - group: admissionregistration.k8s.io
+    kind: MutatingWebhookConfiguration
+    name: longhorn-replica-affinity
+    jsonPointers: ["/webhooks/0/clientConfig/caBundle"]
 ```
 
+### provided
+
+The keypair is mounted from a Secret and something else owns the `caBundle`. Use this when
+policy forbids a workload holding `patch` on a `MutatingWebhookConfiguration`, or when you
+already centralise certificate issuance.
+
+With cert-manager, which renders a self-signed `Issuer`, a `Certificate` and the
+`inject-ca-from` annotation for you:
+
 ```yaml
-# MutatingWebhookConfiguration
-failurePolicy: Ignore
-sideEffects: None
-timeoutSeconds: 5
-objectSelector:            # the apiserver skips the call entirely for everything else
-  matchLabels:
-    longhorn-replica-affinity/enabled: "true"
-namespaceSelector:
-  matchExpressions:
-    - {key: kubernetes.io/metadata.name, operator: NotIn, values: [kube-system, longhorn-system]}
-rules:
-  - operations: [CREATE]
-    apiGroups: [""]
-    apiVersions: [v1]
-    resources: [pods]
+tls:
+  mode: provided
+  certManager:
+    enabled: true
+    # optional, to use your own issuer instead of the rendered self-signed one
+    # issuerRef: {name: my-issuer, kind: ClusterIssuer}
 ```
+
+Without cert-manager, point at a Secret you manage and patch the `caBundle` yourself:
+
+```yaml
+tls:
+  mode: provided
+  secretName: my-webhook-tls
+  certManager: {enabled: false}
+```
+
+The certificate must cover
+`<release>-webhook.<namespace>.svc`, and the Secret needs the usual `tls.crt` / `tls.key`.
+The file is re-read every 60 seconds, so rotation needs no restart either way.
 
 ## Opting in
 
@@ -108,8 +154,13 @@ recreated.
 | `LRA_LONGHORN_NAMESPACE` | `longhorn-system` | where the Longhorn CRs live |
 | `LRA_LISTEN` | `:8443` | webhook TLS listener |
 | `LRA_METRICS_LISTEN` | `:9100` | metrics listener |
-| `LRA_TLS_CERT_FILE` | `/tls/tls.crt` | reloaded every minute, so rotation needs no restart |
-| `LRA_TLS_KEY_FILE` | `/tls/tls.key` | |
+| `LRA_TLS_MODE` | `self-signed` | `self-signed` or `provided`, see TLS above |
+| `LRA_TLS_CERT_FILE` | `/tls/tls.crt` | `provided` mode; re-read every minute so rotation needs no restart |
+| `LRA_TLS_KEY_FILE` | `/tls/tls.key` | `provided` mode |
+| `LRA_TLS_SECRET` | `longhorn-replica-affinity-tls` | `self-signed` mode: where the generated keypair is kept |
+| `LRA_SERVICE_NAME` | `longhorn-replica-affinity-webhook` | `self-signed` mode: the Service name to issue for |
+| `LRA_WEBHOOK_NAME` | `longhorn-replica-affinity` | `self-signed` mode: whose `caBundle` to publish into |
+| `LRA_NAMESPACE` | | `self-signed` mode, required; set it from `fieldRef` `metadata.namespace` |
 | `LRA_RECONCILE_INTERVAL` | `1m` | reconciler tick |
 | `LRA_DWELL` | `30m` | how long a pod sits off its data before the data moves |
 | `LRA_MAX_MOVE_BYTES` | `5368709120` | never move a volume larger than this (actual, not provisioned) |
@@ -147,8 +198,10 @@ winning, so a run that fails or gets cancelled by the concurrency queue is absor
 next one rather than losing its release. `skip-release` only suppresses when nothing else
 in the backlog asked for a release.
 
-Builds `linux/amd64` and `linux/arm64` into one manifest list, pushes to GHCR, and only
-then tags, so a tag always has an image. No floating `:latest`.
+Builds `linux/amd64` and `linux/arm64` into one manifest list, packages the chart at the
+same version with the image pinned as its `appVersion`, pushes both to GHCR, and only then
+creates the git tag. So a tag always has an image, and a chart can never reference an image
+that was never built. No floating `:latest`.
 
 ## Development
 

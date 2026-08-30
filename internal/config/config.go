@@ -9,6 +9,12 @@ import (
 	"time"
 )
 
+// Certificate sources for the webhook listener.
+const (
+	TLSModeSelfSigned = "self-signed"
+	TLSModeProvided   = "provided"
+)
+
 // Config holds every tunable for both subcommands.
 type Config struct {
 	LabelKey   string
@@ -23,6 +29,15 @@ type Config struct {
 	MetricsAddr string
 	CertFile    string
 	KeyFile     string
+
+	// TLSMode selects where the serving certificate comes from: "self-signed" generates
+	// and rotates one into TLSSecret and publishes its CA to WebhookName, "provided"
+	// reads CertFile/KeyFile and leaves the caBundle to whatever manages them.
+	TLSMode     string
+	TLSSecret   string
+	ServiceName string
+	WebhookName string
+	Namespace   string
 
 	ReconcileInterval time.Duration
 	Dwell             time.Duration
@@ -51,6 +66,17 @@ func Load() (Config, error) {
 		MetricsAddr:       env("LRA_METRICS_LISTEN", ":9100"),
 		CertFile:          env("LRA_TLS_CERT_FILE", "/tls/tls.crt"),
 		KeyFile:           env("LRA_TLS_KEY_FILE", "/tls/tls.key"),
+		TLSMode:           env("LRA_TLS_MODE", TLSModeSelfSigned),
+		TLSSecret:         env("LRA_TLS_SECRET", "longhorn-replica-affinity-tls"),
+		ServiceName:       env("LRA_SERVICE_NAME", "longhorn-replica-affinity-webhook"),
+		WebhookName:       env("LRA_WEBHOOK_NAME", "longhorn-replica-affinity"),
+		Namespace:         env("LRA_NAMESPACE", ""),
+	}
+
+	// Namespace is deliberately NOT required here: only the webhook in self-signed mode
+	// needs it, and the reconciler shares this config and never serves TLS.
+	if c.TLSMode != TLSModeSelfSigned && c.TLSMode != TLSModeProvided {
+		return c, fmt.Errorf("LRA_TLS_MODE must be %q or %q, got %q", TLSModeSelfSigned, TLSModeProvided, c.TLSMode)
 	}
 
 	var err error

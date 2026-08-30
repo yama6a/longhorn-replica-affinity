@@ -43,6 +43,22 @@ jobs:
         run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$(go env GOPATH)/bin"
       - name: make ci
         run: make ci
+      # The chart ships at the same version as the image, so a chart that does not render is a broken release.
+      - name: helm lint + template
+        run: |
+          set -euo pipefail
+          helm lint charts/longhorn-replica-affinity
+          for args in \
+            "" \
+            "--set tls.mode=provided --set tls.certManager.enabled=true" \
+            "--set reconciler.enabled=false" \
+            "--set podMonitor.enabled=true"; do
+            echo "rendering with: ${args:-defaults}"
+            # shellcheck disable=SC2086
+            helm template lra charts/longhorn-replica-affinity -n lra $args \
+              --api-versions monitoring.coreos.com/v1 >/dev/null
+          done
+
       # Renovate silently falls back to its defaults on a broken config.
       - name: Validate renovate config
         run: npx --yes --package renovate -- renovate-config-validator --strict

@@ -1,0 +1,86 @@
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/yama6a/longhorn-replica-affinity
+  # Defaults to the chart's appVersion, which the release pipeline pins to the matching image.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# The pod label that opts a workload in. Nothing is mutated without it: the webhook's objectSelector gates on
+# it, so the apiserver never even calls this for anything else.
+labelKey: longhorn-replica-affinity/enabled
+labelValue: "true"
+
+# Weight added per volume a node holds, multiplied by that count and capped at 100. Keep it below any
+# hand-written preference on your pods that should still outrank data locality.
+weight: 30
+
+# RWX volumes are served by a single share-manager pod, so the consumer mounts nfs-ganesha rather than a
+# replica and the share-manager's node is the only placement that saves it a hop. Set true to ignore RWX.
+skipRWX: false
+
+longhornNamespace: longhorn-system
+logLevel: info
+metricsPort: 9100
+
+tls:
+  # self-signed: the webhook mints its own CA and leaf, parks them in a Secret so all replicas agree, and
+  #              publishes the CA into this chart's MutatingWebhookConfiguration. No dependencies.
+  # provided:    the keypair is mounted from an existing Secret and something else owns the caBundle.
+  #              Use this when policy forbids giving a workload patch on a MutatingWebhookConfiguration.
+  mode: self-signed
+  # provided mode only: the Secret to mount, and whether to annotate for cert-manager's ca-injector.
+  secretName: ""
+  certManager:
+    # Renders a self-signed Issuer + Certificate and the inject-ca-from annotation. Requires cert-manager.
+    enabled: false
+    # Leave empty to use the rendered self-signed Issuer; set to use your own.
+    issuerRef: {}
+    #  name: my-issuer
+    #  kind: ClusterIssuer
+
+webhook:
+  replicas: 2
+  port: 8443
+  timeoutSeconds: 5
+  # failurePolicy Ignore is the whole safety story: this optimises placement, so if it is down or slow, pods
+  # must schedule exactly as they would without it. Fail is almost never what you want here.
+  failurePolicy: Ignore
+  # Never mutate what has to come up before this does. The release namespace is added automatically.
+  excludedNamespaces: [kube-system, longhorn-system]
+  podAntiAffinity: true
+  annotations: {}
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+
+reconciler:
+  # Moves the DATA for a pod pinned by a hard constraint that can never move to its data: it borrows the
+  # volume's dataLocality to pull a replica local, then restores the original value. A one-time copy, not
+  # permanent volume-follows-pod.
+  enabled: true
+  intervalSeconds: 60
+  # Long enough that a rolling update or a node drain never triggers a copy.
+  dwell: 30m
+  # Actual (thin) size, not the provisioned ceiling.
+  maxMoveBytes: 5368709120 # 5Gi
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+
+serviceAccount:
+  annotations: {}
+
+priorityClassName: ""
+
+podMonitor:
+  # Requires the Prometheus operator CRDs.
+  enabled: false
+  interval: 60s
+  labels: {}
+
+resources:
+  requests: {cpu: 10m, memory: 48Mi}
+  limits: {memory: 128Mi}
