@@ -32,6 +32,34 @@ many of the pod's volumes that node holds.
 - No API calls on the admission path. Informers hold the replica map in memory.
 - Deploy with `failurePolicy: Ignore`. This optimises placement; it must never block it.
 
+## RWX: two hops, both fixed by moving a pod
+
+An RWX volume is served by exactly one share-manager pod running nfs-ganesha, so there are
+two hops, and neither is fixed by moving data:
+
+```
+consumer  ->  share-manager  ->  replica
+          (1)                (2)
+```
+
+1. Every consumer preferring the share-manager's node collapses this one.
+2. The share-manager preferring a node that holds a replica collapses this one, for all
+   consumers at once.
+
+Both are pod moves. The volume never moves, which matters most here: an RWX volume is
+usually the largest thing in the cluster and is shared, so copying it to chase whichever
+node the share-manager landed on is the worst possible trade.
+
+The reconciler therefore refuses to touch RWX volumes at all and reports
+`lra_volume_unfixable{reason="rwx-share-manager-moves"}` instead. Longhorn also documents
+`strict-local` as incompatible with RWX, so there is no supported way to pin one anyway.
+
+Hop 2 needs a webhook entry scoped to Longhorn's own namespace, which is why it is a
+separate entry rather than a hole in the namespace exclusion: the `objectSelector` means
+the API server never calls this for any other Longhorn pod, so the storage layer's own
+bootstrap is untouched, and `failurePolicy: Ignore` still applies. Turn it off with
+`shareManager.enabled=false`.
+
 ## `reconcile`
 
 For pods pinned by a hard constraint (device plugin, node selector, architecture) that
@@ -97,7 +125,7 @@ ignoreDifferences:
   - group: admissionregistration.k8s.io
     kind: MutatingWebhookConfiguration
     name: longhorn-replica-affinity
-    jsonPointers: ["/webhooks/0/clientConfig/caBundle"]
+    jqPathExpressions: [".webhooks[].clientConfig.caBundle"]
 ```
 
 ### provided
@@ -176,7 +204,7 @@ recreated.
 | `lra_volume_local{namespace,pvc,node}` | 1 when an attached volume has a running replica on its own node |
 | `lra_admissions_total{outcome}` | `injected`, `no-local-replica`, `pre-scheduled`, `cache-cold`, `decode` |
 | `lra_data_locality_flips_total{direction}` | `borrow` / `restore` |
-| `lra_volume_unfixable{namespace,pvc,reason}` | not moving this one: `too-large`, `longhorn-managed` |
+| `lra_volume_unfixable{namespace,pvc,access_mode,reason}` | not moving this one: `too-large`, `longhorn-managed`, `rwx-share-manager-moves` |
 | `lra_build_info{version}` | always 1 |
 
 ## Releases

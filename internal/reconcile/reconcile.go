@@ -76,8 +76,10 @@ func (r *Reconciler) pass(ctx context.Context) {
 
 	for _, v := range r.Index.AttachedVolumes() {
 		seen[v.Name] = struct{}{}
+		// For rwx the attached node is the share-manager's, so this measures the hop from
+		// the share-manager to its replicas, which every consumer of the volume pays.
 		isLocal := slices.Contains(r.Index.ReplicaNodes(v.Name), v.AttachedNode)
-		metrics.SetLocal(v.Namespace, v.PVCName, v.AttachedNode, isLocal)
+		metrics.SetLocal(v.Namespace, v.PVCName, v.AttachedNode, v.AccessMode, isLocal)
 
 		if isLocal {
 			delete(r.since, v.Name)
@@ -101,6 +103,15 @@ func (r *Reconciler) considerBorrow(ctx context.Context, v index.Volume) {
 		return // already borrowed; Longhorn is mid-rebuild
 	}
 
+	// Never move an rwx volume. Its attached node is the share-manager's, and a
+	// share-manager is a pod, so the webhook moves IT onto a replica instead. Copying a
+	// shared volume around would be the exact thing this project exists to avoid.
+	// (strict-local is documented as incompatible with rwx anyway.)
+	if v.RWX() {
+		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "rwx-share-manager-moves")
+		return
+	}
+
 	opted, err := r.optedIn(ctx, v)
 	if err != nil {
 		r.Log.Error("check opt-in", "volume", v.Name, "err", err)
@@ -112,11 +123,11 @@ func (r *Reconciler) considerBorrow(ctx context.Context, v index.Volume) {
 
 	if v.DataLocality != "disabled" {
 		// Already best-effort or strict-local. Longhorn owns the outcome; nothing to borrow.
-		metrics.SetUnfixable(v.Namespace, v.PVCName, "longhorn-managed")
+		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "longhorn-managed")
 		return
 	}
 	if v.ActualSize > r.Cfg.MaxMoveBytes {
-		metrics.SetUnfixable(v.Namespace, v.PVCName, "too-large")
+		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "too-large")
 		return
 	}
 

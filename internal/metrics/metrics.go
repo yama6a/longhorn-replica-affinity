@@ -25,13 +25,13 @@ var (
 
 	local = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "lra_volume_local",
-		Help: "1 when an attached volume has a running replica on the node it is attached to, else 0.",
-	}, []string{"namespace", "pvc", "node"})
+		Help: "1 when an attached volume has a running replica on its attached node (the share-manager's node for rwx), else 0.",
+	}, []string{"namespace", "pvc", "node", "access_mode"})
 
 	unfixable = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "lra_volume_unfixable",
-		Help: "1 when a volume is non-local and the reconciler will not move it (too large, or opted out).",
-	}, []string{"namespace", "pvc", "reason"})
+		Help: "1 when a volume is non-local and the reconciler will not move it.",
+	}, []string{"namespace", "pvc", "access_mode", "reason"})
 
 	buildInfo = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "lra_build_info",
@@ -67,18 +67,19 @@ func ResetVolumes() {
 	unfixable.Reset()
 }
 
-// SetLocal publishes whether one attached volume has a replica under its own pod.
-func SetLocal(namespace, pvc, node string, isLocal bool) {
+// SetLocal publishes whether an attached volume has a replica on its attached node, which
+// for rwx is the share-manager's node.
+func SetLocal(namespace, pvc, node, accessMode string, isLocal bool) {
 	v := 0.0
 	if isLocal {
 		v = 1
 	}
-	local.WithLabelValues(namespace, pvc, node).Set(v)
+	local.WithLabelValues(namespace, pvc, node, accessMode).Set(v)
 }
 
 // SetUnfixable flags a volume the reconciler has decided it will not move.
-func SetUnfixable(namespace, pvc, reason string) {
-	unfixable.WithLabelValues(namespace, pvc, reason).Set(1)
+func SetUnfixable(namespace, pvc, accessMode, reason string) {
+	unfixable.WithLabelValues(namespace, pvc, accessMode, reason).Set(1)
 }
 
 // Serve runs the scrape endpoint until ctx is cancelled.

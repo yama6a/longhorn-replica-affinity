@@ -49,3 +49,38 @@ webhooks:
         apiVersions: ["v1"]
         resources: ["pods"]
         scope: Namespaced
+{{- if .Values.shareManager.enabled }}
+  # A share-manager is Longhorn's nfs-ganesha pod for one RWX volume, and every consumer
+  # of that volume reads through it. Moving IT onto a node that already holds a replica
+  # removes that hop for all of them, without copying the volume anywhere.
+  #
+  # Deliberately a second entry rather than dropping longhorn-system from the exclusion
+  # above: the objectSelector means the apiserver never calls us for any other Longhorn
+  # pod, so the storage layer's own bootstrap is untouched.
+  - name: sharemanager.longhorn-replica-affinity.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+    reinvocationPolicy: Never
+    clientConfig:
+      service:
+        name: {{ include "lra.webhookName" . }}
+        namespace: {{ .Release.Namespace }}
+        path: /mutate
+        port: 443
+    objectSelector:
+      matchLabels:
+        longhorn.io/component: share-manager
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values: [{{ .Values.longhornNamespace | quote }}]
+    rules:
+      - operations: ["CREATE"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+        scope: Namespaced
+{{- end }}

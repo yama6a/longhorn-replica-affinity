@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
@@ -26,6 +27,20 @@ var (
 
 // ShareManagerSelector matches the nfs-ganesha pod Longhorn runs per RWX volume.
 const ShareManagerSelector = "longhorn.io/component=share-manager"
+
+// ShareManagerPrefix is how Longhorn names that pod: share-manager-<volume>.
+const ShareManagerPrefix = "share-manager-"
+
+// VolumeForShareManager returns the volume a share-manager pod serves, or "" if the pod
+// is not one. Longhorn derives the pod name from the volume name, so this needs no lookup.
+func VolumeForShareManager(podName string) string {
+	return strings.TrimPrefix(podName, ShareManagerPrefix)
+}
+
+// IsShareManager reports whether a pod name is a share-manager's.
+func IsShareManager(podName string) bool {
+	return strings.HasPrefix(podName, ShareManagerPrefix)
+}
 
 // Volume is the subset of a Longhorn Volume this program acts on.
 type Volume struct {
