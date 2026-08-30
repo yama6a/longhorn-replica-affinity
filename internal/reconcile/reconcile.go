@@ -1,5 +1,5 @@
-// Package reconcile moves data to the pod in the one case the webhook cannot help:
-// a pod pinned by a hard constraint, sitting on a node with no replica of its volume.
+// Package reconcile moves data to the pod in the one case the webhook cannot help: a pod
+// pinned by a hard constraint, on a node with no replica of its volume.
 package reconcile
 
 import (
@@ -22,18 +22,18 @@ import (
 )
 
 // bestEffort is the only dataLocality that makes Longhorn rebuild a replica onto the
-// node its pod already runs on.
+// pod's node.
 const bestEffort = "best-effort"
 
-// Store is the slice of the replica index the reconciler needs. An interface so the
-// decision logic can be tested without informers.
+// Store is the slice of the index the reconciler needs, as an interface so the decision
+// logic is testable without informers.
 type Store interface {
 	AttachedVolumes() []index.Volume
 	ReplicaNodes(volume string) []string
 }
 
-// Reconciler borrows a volume's dataLocality field long enough to pull one replica
-// local, then puts it back.
+// Reconciler borrows a volume's dataLocality long enough to pull one replica local, then
+// puts it back.
 type Reconciler struct {
 	Cfg   config.Config
 	Index Store
@@ -150,7 +150,7 @@ func (r *Reconciler) restore(ctx context.Context, v index.Volume) {
 }
 
 // patch sets spec.dataLocality. A non-empty restore parks the previous value in the
-// annotation; an empty one clears it, which is what ends a borrow.
+// annotation; an empty one clears it, ending the borrow.
 func (r *Reconciler) patch(ctx context.Context, name, locality, restore string) error {
 	ann := map[string]any{r.Cfg.RestoreAnnotation(): nil}
 	if restore != "" {
@@ -172,8 +172,7 @@ func (r *Reconciler) patch(ctx context.Context, name, locality, restore string) 
 }
 
 // optedIn reports whether any pod consuming the volume carries the opt-in label. A
-// labelled pod that is still off its data means the preference lost to a hard
-// constraint, which is the definition of a pod that cannot move.
+// labelled pod still off its data means the preference lost to something hard.
 func (r *Reconciler) optedIn(ctx context.Context, v index.Volume) (bool, error) {
 	if v.Namespace == "" || len(v.PodNames) == 0 {
 		return false, nil

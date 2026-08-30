@@ -1,5 +1,4 @@
-# Build on the builder's native arch and cross-compile to the target (buildx supplies
-# TARGETOS/TARGETARCH), so the arm64 image is built without QEMU emulation.
+# Cross-compile from the builder's native arch, so arm64 needs no QEMU.
 FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
 ARG TARGETOS TARGETARCH
 ARG VERSION=dev
@@ -9,8 +8,7 @@ COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod,id=go-mod go mod download
 COPY . .
 
-# Per-arch build cache id: the amd64 and arm64 builds run concurrently and would
-# otherwise thrash a single shared mount. The module cache is arch-independent.
+# Per-arch cache id: the two builds run concurrently and would thrash a shared mount.
 RUN --mount=type=cache,target=/root/.cache/go-build,id=go-build-$TARGETARCH \
     --mount=type=cache,target=/go/pkg/mod,id=go-mod \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \

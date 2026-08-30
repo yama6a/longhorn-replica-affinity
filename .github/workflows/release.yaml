@@ -1,11 +1,10 @@
 name: release
 
-# A merged PR is itself a push to main, so this covers both cases.
 on:
   push:
     branches: [main]
 
-# Two merges landing together would otherwise race for the same tag.
+# Two merges landing together would race for the same tag.
 concurrency:
   group: release
   cancel-in-progress: false
@@ -22,8 +21,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # The bump comes from the merged PR's label. A direct push to main has no PR and
-      # therefore no label, so it ships no release rather than guessing.
+      # A direct push has no PR and no label, so it ships nothing rather than guessing.
       - name: Resolve bump from the merged PR
         id: bump
         env:
@@ -82,13 +80,13 @@ jobs:
           platforms: linux/amd64,linux/arm64 # a manifest list, one image per arch
           push: true
           build-args: VERSION=${{ steps.version.outputs.version }}
-          # No floating :latest tag on purpose. This runs in the admission path, and a
-          # tag that moves under a cluster is the wrong kind of surprise there.
+          # No :latest on purpose: this runs in the admission path, where a tag that moves
+          # under a cluster is the wrong kind of surprise.
           tags: ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Only tag once the image is actually pushed, so a tag always has an image.
+      # Tag only after the push, so a tag always has an image.
       - name: Create GitHub release
         if: steps.version.outputs.version != ''
         env:

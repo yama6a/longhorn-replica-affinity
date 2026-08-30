@@ -20,8 +20,8 @@ type Decision struct {
 	Skipped   string
 }
 
-// Lookup is the slice of the replica index the admission path needs. An interface so
-// the decision logic can be tested without informers.
+// Lookup is the slice of the index the admission path needs, as an interface so the
+// decision logic is testable without informers.
 type Lookup interface {
 	Synced() bool
 	VolumeNameForClaim(namespace, name string) (string, bool)
@@ -44,7 +44,7 @@ func (a *Admitter) Review(req *admissionv1.AdmissionRequest) (*admissionv1.Admis
 
 	var pod corev1.Pod
 	if err := json.Unmarshal(req.Object.Raw, &pod); err != nil {
-		// Allowed anyway: this webhook exists to optimise placement, never to block it.
+		// Allowed anyway: this optimises placement, it never blocks it.
 		a.Log.Error("decode pod", "err", err)
 		return resp, Decision{Namespace: req.Namespace, Skipped: "decode"}
 	}
@@ -60,8 +60,7 @@ func (a *Admitter) Review(req *admissionv1.AdmissionRequest) (*admissionv1.Admis
 		return resp, d
 	}
 
-	// A pod created with a node already chosen never reaches the scheduler, so affinity
-	// on it is dead weight the API server will carry for the pod's whole life.
+	// Never reaches the scheduler, so affinity on it is dead weight for the pod's life.
 	if pod.Spec.NodeName != "" {
 		d.Skipped = "pre-scheduled"
 		return resp, d
@@ -94,10 +93,8 @@ func (a *Admitter) Review(req *admissionv1.AdmissionRequest) (*admissionv1.Admis
 	return resp, d
 }
 
-// targets collects every node holding data for the pod, one entry per volume. A node
-// appearing for two volumes is returned twice on purpose: Terms turns each into its own
-// weighted term and the scheduler sums them, so the node with the most of the pod's data
-// wins.
+// targets returns one entry per volume per node. Repeats are deliberate: Terms weights a
+// node by how often it appears, so the node holding most of the pod's data wins.
 func (a *Admitter) targets(pod *corev1.Pod, namespace string) (nodes []string, matched int) {
 	for _, v := range pod.Spec.Volumes {
 		if v.PersistentVolumeClaim == nil {
@@ -105,8 +102,7 @@ func (a *Admitter) targets(pod *corev1.Pod, namespace string) (nodes []string, m
 		}
 		volName, ok := a.Index.VolumeNameForClaim(namespace, v.PersistentVolumeClaim.ClaimName)
 		if !ok {
-			// Immediate binding usually wins the race, but a first-ever pod can be
-			// admitted before its PVC binds. Nothing to prefer yet.
+			// A first-ever pod can be admitted before its PVC binds.
 			continue
 		}
 		vol, ok := a.Index.Volume(volName)
@@ -118,8 +114,7 @@ func (a *Admitter) targets(pod *corev1.Pod, namespace string) (nodes []string, m
 			if a.SkipRWX {
 				continue
 			}
-			// The consumer mounts nfs-ganesha, not a replica, so the share-manager's
-			// node is the only placement that saves it a hop.
+			// The consumer mounts nfs-ganesha, not a replica.
 			if n := a.Index.ShareManagerNode(volName); n != "" {
 				nodes = append(nodes, n)
 				matched++
