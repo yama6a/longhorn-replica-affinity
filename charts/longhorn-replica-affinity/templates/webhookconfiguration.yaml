@@ -1,0 +1,51 @@
+{{- $selfSigned := eq .Values.tls.mode "self-signed" -}}
+{{- $injectFrom := and (eq .Values.tls.mode "provided") .Values.tls.certManager.enabled -}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "lra.fullname" . }}
+  labels: {{- include "lra.labels" . | nindent 4 }}
+  annotations:
+    {{- if $injectFrom }}
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "lra.webhookName" . }}
+    {{- end }}
+    {{- with .Values.webhook.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- if $selfSigned }}
+  # In self-signed mode the pod writes caBundle itself, so Helm and ArgoCD must not fight it back to empty.
+  # ArgoCD additionally needs an ignoreDifferences entry; see the chart README.
+{{- end }}
+webhooks:
+  - name: pods.longhorn-replica-affinity.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+    reinvocationPolicy: Never
+    clientConfig:
+      service:
+        name: {{ include "lra.webhookName" . }}
+        namespace: {{ .Release.Namespace }}
+        path: /mutate
+        port: 443
+    # The apiserver never calls this for a pod without the opt-in label, so an un-opted-in workload pays
+    # nothing and cannot be affected by a bug in here.
+    objectSelector:
+      matchLabels:
+        {{ .Values.labelKey }}: {{ .Values.labelValue | quote }}
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            {{- range .Values.webhook.excludedNamespaces }}
+            - {{ . | quote }}
+            {{- end }}
+            - {{ .Release.Namespace | quote }}
+    rules:
+      - operations: ["CREATE"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+        scope: Namespaced

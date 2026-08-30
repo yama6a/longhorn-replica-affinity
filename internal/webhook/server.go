@@ -19,11 +19,14 @@ import (
 
 const maxBody = 3 << 20
 
+// CertSource hands the server a keypair, and is re-consulted periodically so a rotated
+// certificate is picked up without a restart.
+type CertSource func(context.Context) (certPEM, keyPEM []byte, err error)
+
 // Server is the TLS admission endpoint.
 type Server struct {
 	Addr     string
-	CertFile string
-	KeyFile  string
+	Certs    CertSource
 	Admitter *Admitter
 	Log      *slog.Logger
 
@@ -33,10 +36,11 @@ type Server struct {
 
 // Serve blocks until ctx is cancelled or the listener fails.
 func (s *Server) Serve(ctx context.Context) error {
-	if err := s.loadCert(); err != nil {
+	if err := s.loadCert(ctx); err != nil {
 		return err
 	}
-	// cert-manager rotates the Secret in place without restarting the pod.
+	// Certificates rotate under a running pod either way: cert-manager rewrites the
+	// Secret in place, and self-signed mode regenerates before expiry.
 	go s.watchCert(ctx)
 
 	mux := http.NewServeMux()
@@ -101,10 +105,14 @@ func (s *Server) handleMutate(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) loadCert() error {
-	c, err := tls.LoadX509KeyPair(s.CertFile, s.KeyFile)
+func (s *Server) loadCert(ctx context.Context) error {
+	certPEM, keyPEM, err := s.Certs(ctx)
 	if err != nil {
-		return fmt.Errorf("load keypair: %w", err)
+		return err
+	}
+	c, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return fmt.Errorf("parse keypair: %w", err)
 	}
 	s.mu.Lock()
 	s.cert = &c
@@ -120,7 +128,7 @@ func (s *Server) watchCert(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := s.loadCert(); err != nil {
+			if err := s.loadCert(ctx); err != nil {
 				s.Log.Error("reload cert", "err", err)
 			}
 		}

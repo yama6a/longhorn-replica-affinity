@@ -101,6 +101,21 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Same version as the image, packaged from the tree that produced it, so a chart can never point at an
+      # image tag that was never built. Pushed before the git tag for the same reason the image is.
+      - name: Package and push the Helm chart
+        if: steps.version.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "${GH_TOKEN}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm package charts/longhorn-replica-affinity \
+            --version "${VERSION#v}" --app-version "${VERSION}" --destination /tmp/chart
+          helm push "/tmp/chart/longhorn-replica-affinity-${VERSION#v}.tgz" \
+            "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts"
+
       # Tag only after the push, so a tag always has an image.
       #
       # Retried because this endpoint has returned a one-off 403 "Resource not accessible

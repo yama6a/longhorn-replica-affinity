@@ -1,0 +1,35 @@
+{{- if and (eq .Values.tls.mode "provided") .Values.tls.certManager.enabled }}
+{{- if not .Values.tls.certManager.issuerRef }}
+{{- /*
+A self-signed Issuer, not an ACME one: this name only ever resolves inside the cluster, a public CA cannot
+issue for a .svc, and the apiserver's trust comes from the caBundle ca-injector writes, not a public root.
+*/ -}}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "lra.fullname" . }}-selfsigned
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "lra.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "lra.webhookName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "lra.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "lra.tlsSecret" . }}
+  issuerRef:
+    {{- if .Values.tls.certManager.issuerRef }}
+    {{- toYaml .Values.tls.certManager.issuerRef | nindent 4 }}
+    {{- else }}
+    name: {{ include "lra.fullname" . }}-selfsigned
+    kind: Issuer
+    {{- end }}
+  dnsNames:
+    - {{ include "lra.webhookName" . }}.{{ .Release.Namespace }}.svc
+    - {{ include "lra.webhookName" . }}.{{ .Release.Namespace }}.svc.cluster.local
+{{- end }}

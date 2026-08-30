@@ -79,3 +79,27 @@ func TestRestoreAnnotationWithBareLabelKey(t *testing.T) {
 		t.Errorf("RestoreAnnotation = %q", got)
 	}
 }
+
+func TestTLSModeDefaultsToSelfSigned(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.TLSMode != TLSModeSelfSigned {
+		t.Errorf("TLSMode = %q, want %q", c.TLSMode, TLSModeSelfSigned)
+	}
+}
+
+func TestUnknownTLSModeRejected(t *testing.T) {
+	t.Setenv("LRA_TLS_MODE", "acme")
+	if _, err := Load(); err == nil {
+		t.Error("an unknown TLS mode should be rejected at startup")
+	}
+}
+
+func TestProvidedTLSModeNeedsNoNamespace(t *testing.T) {
+	t.Setenv("LRA_TLS_MODE", "provided")
+	if _, err := Load(); err != nil {
+		t.Errorf("provided mode reads files and needs no namespace: %v", err)
+	}
+}

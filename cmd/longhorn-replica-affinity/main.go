@@ -16,6 +16,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/yama6a/longhorn-replica-affinity/internal/certs"
 	"github.com/yama6a/longhorn-replica-affinity/internal/config"
 	"github.com/yama6a/longhorn-replica-affinity/internal/index"
 	"github.com/yama6a/longhorn-replica-affinity/internal/metrics"
@@ -89,7 +90,7 @@ func run() error {
 	switch os.Args[1] {
 	case "webhook":
 		s := &webhook.Server{
-			Addr: cfg.ListenAddr, CertFile: cfg.CertFile, KeyFile: cfg.KeyFile, Log: log,
+			Addr: cfg.ListenAddr, Certs: certSource(cfg, kc, log), Log: log,
 			Admitter: &webhook.Admitter{Index: idx, Weight: cfg.Weight, SkipRWX: cfg.SkipRWX, Log: log},
 		}
 		g.Go(func() error { return s.Serve(gctx) })
@@ -105,6 +106,40 @@ func run() error {
 		return fmt.Errorf("run %s: %w", os.Args[1], err)
 	}
 	return nil
+}
+
+// certSource picks where the serving keypair comes from. Self-signed needs no
+// cert-manager: it mints a CA and leaf, parks them in a Secret so every replica agrees,
+// and publishes the CA into the webhook configuration's caBundle.
+func certSource(cfg config.Config, kc kubernetes.Interface, log *slog.Logger) webhook.CertSource {
+	if cfg.TLSMode == config.TLSModeProvided {
+		return func(context.Context) ([]byte, []byte, error) {
+			crt, err := os.ReadFile(cfg.CertFile)
+			if err != nil {
+				return nil, nil, fmt.Errorf("read %s: %w", cfg.CertFile, err)
+			}
+			key, err := os.ReadFile(cfg.KeyFile)
+			if err != nil {
+				return nil, nil, fmt.Errorf("read %s: %w", cfg.KeyFile, err)
+			}
+			return crt, key, nil
+		}
+	}
+
+	c := certs.Config{
+		Namespace:  cfg.Namespace,
+		SecretName: cfg.TLSSecret,
+		Service:    cfg.ServiceName,
+		WebhookRef: cfg.WebhookName,
+	}
+	return func(ctx context.Context) ([]byte, []byte, error) {
+		b, err := certs.Ensure(ctx, kc, c)
+		if err != nil {
+			return nil, nil, fmt.Errorf("ensure certificate: %w", err)
+		}
+		log.Debug("serving certificate ready", "secret", cfg.TLSSecret, "webhook", cfg.WebhookName)
+		return b.TLSCert, b.TLSKey, nil
+	}
 }
 
 func logLevel() slog.Level {
