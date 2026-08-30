@@ -141,6 +141,13 @@ jobs:
             fi
             kubeconform -strict -ignore-missing-schemas -summary \
               -schema-location default -schema-location "$schema" <<<"$out" || fail=1
+            # Helm parses a large YAML integer as float64, so `| quote` alone renders
+            # "5.36870912e+09" and the binary rejects it at startup. It renders and
+            # conforms perfectly, so only checking the value itself catches it.
+            if grep -nE '^\s+(-\s+\{?name:.*)?value: "[0-9]+\.[0-9]+e[+-][0-9]+"' <<<"$out"; then
+              echo "::error::$name renders a float in scientific notation; pipe through int64"
+              fail=1
+            fi
             echo "::endgroup::"
           done
           exit $fail
