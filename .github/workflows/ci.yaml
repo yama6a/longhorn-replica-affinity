@@ -31,7 +31,7 @@ jobs:
           fi
           echo "release label: ${picked}"
 
-  build:
+  go:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,26 +39,119 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      # A stale go.mod/go.sum still builds, so nothing else here would catch it.
+      - name: go mod tidy is committed
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum \
+            || { echo "::error::go.mod/go.sum are not tidy; run 'make tidy' and commit"; exit 1; }
+
       - name: Install golangci-lint
         run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$(go env GOPATH)/bin"
-      - name: make ci
-        run: make ci
-      # The chart ships at the same version as the image, so a chart that does not render is a broken release.
-      - name: helm lint + template
+
+      # setup-go caches GOMODCACHE and GOCACHE; golangci-lint keeps its own analysis cache
+      # elsewhere, and re-analysing every package from scratch is most of the lint time.
+      - name: restore golangci-lint cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/golangci-lint
+          key: golangci-${{ runner.os }}-${{ hashFiles('go.sum', '.golangci.yaml') }}
+          restore-keys: golangci-${{ runner.os }}-
+
+      # `run` does not enforce the formatters, so check them separately.
+      - name: format
+        run: golangci-lint fmt --diff
+
+      - name: vet + lint
+        run: |
+          go vet ./...
+          golangci-lint run ./... -c .golangci.yaml
+
+      # -race is the point: the cert bootstrap and the informer-backed index are both read
+      # concurrently with the admission path.
+      - name: test
+        run: go test ./... -race -count=1 -coverprofile=cover.out
+
+      - name: coverage summary
+        run: go tool cover -func=cover.out | tail -1
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
+      # The image is a manifest list, so a compile error on the arch CI does not run on
+      # would only surface at release time.
+      - name: cross-compile both release targets
+        run: |
+          for arch in amd64 arm64; do
+            echo "building linux/$arch"
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build ./...
+          done
+
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: install kubeconform
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar xz kubeconform && sudo mv kubeconform /usr/local/bin/
+
+      # The chart ships at the same version as the image, so a chart that does not render
+      # is a broken release. Every values combination is rendered, because a conditional
+      # that only breaks under one of them is exactly what gets missed.
+      - name: helm lint + template + kubeconform
         run: |
           set -euo pipefail
           helm lint charts/longhorn-replica-affinity
-          for args in \
-            "" \
-            "--set tls.mode=provided --set tls.certManager.enabled=true" \
-            "--set reconciler.enabled=false" \
-            "--set podMonitor.enabled=true"; do
-            echo "rendering with: ${args:-defaults}"
+          schema='https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+          cases=(
+            "defaults|"
+            "provided + cert-manager|--set tls.mode=provided --set tls.certManager.enabled=true"
+            "provided + own issuer|--set tls.mode=provided --set tls.certManager.enabled=true --set tls.certManager.issuerRef.name=x --set tls.certManager.issuerRef.kind=ClusterIssuer"
+            "provided + own secret|--set tls.mode=provided --set tls.secretName=my-tls"
+            "reconciler off|--set reconciler.enabled=false"
+            "podMonitor on|--set podMonitor.enabled=true"
+            "fullnameOverride|--set fullnameOverride=lra-custom"
+          )
+          fail=0
+          for c in "${cases[@]}"; do
+            name="${c%%|*}"; args="${c#*|}"
+            echo "::group::$name"
             # shellcheck disable=SC2086
-            helm template lra charts/longhorn-replica-affinity -n lra $args \
-              --api-versions monitoring.coreos.com/v1 >/dev/null
+            if ! out=$(helm template lra charts/longhorn-replica-affinity -n lra $args \
+                         --api-versions monitoring.coreos.com/v1 2>&1); then
+              echo "$out"; echo "::error::$name failed to render"; fail=1; echo "::endgroup::"; continue
+            fi
+            # An empty render passes kubeconform trivially, so assert it produced something.
+            n=$(grep -c '^kind:' <<<"$out" || true)
+            if [ "$n" -lt 5 ]; then
+              echo "::error::$name rendered only $n resources"; fail=1
+            fi
+            kubeconform -strict -ignore-missing-schemas -summary \
+              -schema-location default -schema-location "$schema" <<<"$out" || fail=1
+            echo "::endgroup::"
           done
+          exit $fail
 
+  meta:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: restore npm cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-renovate
+      - name: yamllint
+        run: pipx run yamllint -c .yamllint.yml .
+      - name: actionlint
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
       # Renovate silently falls back to its defaults on a broken config.
       - name: Validate renovate config
         run: npx --yes --package renovate -- renovate-config-validator --strict

@@ -1,0 +1,14 @@
+# Relaxed on purpose: this repo's YAML is Helm templates and workflows, not prose, so the stylistic rules are
+# off and only real syntax/structure errors fail the job.
+extends: relaxed
+rules:
+  line-length: disable
+  truthy: disable
+  colons: disable
+  empty-lines: disable
+  comments:
+    min-spaces-from-content: 1
+
+# Helm templates are Go-templated, NOT valid YAML.
+ignore: |
+  charts/**/templates/

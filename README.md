@@ -206,13 +206,15 @@ that was never built. No floating `:latest`.
 ## Development
 
 ```bash
-make ci      # vet + lint + test
+make ci         # fmt + vet + lint + race tests + govulncheck + chart render
 make build
-make image   # multi-arch, no push
+make chart      # helm lint + render every values combination
+make image      # multi-arch, no push
 ```
 
 Everything that decides anything is a pure function over an interface, so the tests need
-no cluster.
+no cluster. CI additionally runs kubeconform over every rendered chart combination,
+actionlint, yamllint, a `go mod tidy` check and a cross-compile of both release targets.
 
 ## Prior art
 
