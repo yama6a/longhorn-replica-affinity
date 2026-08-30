@@ -1,0 +1,102 @@
+name: release
+
+# A merged PR is itself a push to main, so this covers both cases.
+on:
+  push:
+    branches: [main]
+
+# Two merges landing together would otherwise race for the same tag.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write # create the tag and the GitHub release
+  packages: write # or the image push fails with permission_denied
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The bump comes from the merged PR's label. A direct push to main has no PR and
+      # therefore no label, so it ships no release rather than guessing.
+      - name: Resolve bump from the merged PR
+        id: bump
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          labels=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SHA}/pulls" \
+            --jq '.[0].labels[]?.name' 2>/dev/null || true)
+          if [ -z "$labels" ]; then
+            echo "no PR labels for ${SHA}, skipping release"
+            echo "kind=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          kind=$(grep -x -E 'patch|minor|major|skip-release' <<<"$labels" | head -1 || true)
+          echo "labels: ${labels//$'\n'/, } -> ${kind:-none}"
+          echo "kind=${kind:-none}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute next version
+        id: version
+        if: steps.bump.outputs.kind != 'none' && steps.bump.outputs.kind != 'skip-release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KIND: ${{ steps.bump.outputs.kind }}
+        run: |
+          set -euo pipefail
+          latest=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // "v0.0.0"')
+          IFS=. read -r major minor patch <<<"${latest#v}"
+          case "$KIND" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          next="v${major}.${minor}.${patch}"
+          echo "${latest} + ${KIND} -> ${next}"
+          echo "version=${next}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        if: steps.version.outputs.version != ''
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        if: steps.version.outputs.version != ''
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        if: steps.version.outputs.version != ''
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: .build/Dockerfile
+          platforms: linux/amd64,linux/arm64 # a manifest list, one image per arch
+          push: true
+          build-args: VERSION=${{ steps.version.outputs.version }}
+          # No floating :latest tag on purpose. This runs in the admission path, and a
+          # tag that moves under a cluster is the wrong kind of surprise there.
+          tags: ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Only tag once the image is actually pushed, so a tag always has an image.
+      - name: Create GitHub release
+        if: steps.version.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$VERSION" \
+            --target "${{ github.sha }}" \
+            --title "$VERSION" \
+            --generate-notes \
+            --notes "Image: \`ghcr.io/${GITHUB_REPOSITORY}:${VERSION}\`"

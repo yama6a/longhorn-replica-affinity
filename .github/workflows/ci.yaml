@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+    # labeled/unlabeled so the release-label gate re-runs the moment a label changes,
+    # instead of staying red until the next push.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  release-label:
+    name: release label
+    runs-on: ubuntu-latest
+    steps:
+      - name: Exactly one release label
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          picked=$(jq -r '.[]' <<<"$LABELS" | grep -x -E 'patch|minor|major|skip-release' || true)
+          count=$(grep -c . <<<"$picked" || true)
+          if [ "$count" -ne 1 ]; then
+            echo "::error::this PR carries ${count} release labels (${picked//$'\n'/, }); it needs exactly one of: patch, minor, major, skip-release"
+            echo "Every merge to main cuts a release, so the bump has to be a deliberate choice." >&2
+            exit 1
+          fi
+          echo "release label: ${picked}"
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install golangci-lint
+        run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$(go env GOPATH)/bin"
+      - name: make ci
+        run: make ci
+      # Renovate silently falls back to its defaults on a broken config, so validate it here instead.
+      - name: Validate renovate config
+        run: npx --yes --package renovate -- renovate-config-validator --strict

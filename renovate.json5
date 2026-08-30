@@ -1,0 +1,64 @@
+{
+  // Opens dependency-update PRs for every pin in the repo. Which manager owns what:
+  //   gomod           go.mod + go.sum, including the `go` directive
+  //   dockerfile      the build and runtime base images in .build/Dockerfile
+  //   github-actions  the action pins in .github/workflows/*.yaml
+  // Cadence is the cron in .github/workflows/renovate.yaml, not an internal `schedule`, so a manual
+  // workflow_dispatch works too. Docs: README.md, "Releases".
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [
+    "config:recommended",
+    ":dependencyDashboard", // one issue listing every pending/failed update (needs repo Issues enabled)
+    "helpers:pinGitHubActionDigestsToSemver", // action pins carry a readable version alongside the digest
+  ],
+  prConcurrentLimit: 12,
+  prHourlyLimit: 0, // no hourly throttle
+  dependencyDashboardTitle: "Renovate dependency dashboard",
+
+  // ci.yaml fails any PR without exactly one of patch/minor/major/skip-release, so an unlabelled Renovate PR
+  // could never merge. A dependency bump is a patch release of THIS tool regardless of the dependency's own
+  // bump type: the tool's public surface is its flags, env and behaviour, and none of those move because a
+  // library did. A change that does move them is a hand-written PR, labelled by hand.
+  labels: ["patch"],
+
+  // A gomod bump can leave transitive requirements stale in go.mod.
+  postUpdateOptions: ["gomodTidy"],
+
+  packageRules: [
+    {
+      // ONE combined, auto-merged PR for every NON-major update, gated on the required CI checks.
+      // WARNING: merging to main runs release.yaml, which cuts a new tag and pushes a new ghcr.io image.
+      // Every automerged bump therefore produces a patch release. Add minimumReleaseAge or drop automerge
+      // here to slow that down.
+      description: "combine all non-major updates into one auto-merged PR",
+      matchUpdateTypes: ["minor", "patch", "digest", "pin", "lockFileMaintenance"],
+      groupName: "all non-major dependencies",
+      automerge: true,
+    },
+    // MAJOR updates get their own PR each, which is Renovate's default, so no rule below does it. That keeps
+    // a breaking bump reviewed in isolation. It still carries the `patch` label from above: relabel it by
+    // hand if the upgrade actually changes this tool's behaviour.
+    {
+      // client-go, api and apimachinery are released together and their types cross-reference, so a partial
+      // bump does not compile.
+      description: "keep the kubernetes libraries in lockstep",
+      matchPackageNames: ["k8s.io/api", "k8s.io/apimachinery", "k8s.io/client-go"],
+      groupName: "kubernetes libraries",
+    },
+    {
+      // Pin action refs to commit digests, so a moving tag cannot swap the action's code under us. The
+      // semver-comment helper above keeps a readable version beside each digest.
+      description: "pin github action refs to digests",
+      matchManagers: ["github-actions"],
+      pinDigests: true,
+    },
+    {
+      // distroless/static:nonroot is a rolling tag with no version in it, so a digest pin is the only way
+      // Renovate can track it at all. golang:<major>.<minor>-alpine gets a digest for the same reason its
+      // patch releases move under a fixed tag.
+      description: "pin base images to digests",
+      matchManagers: ["dockerfile"],
+      pinDigests: true,
+    },
+  ],
+}
