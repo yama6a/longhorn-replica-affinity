@@ -148,7 +148,7 @@ Prometheus format on `:9100/metrics`.
 | Series | Type | Meaning |
 |---|---|---|
 | `lra_volume_local{namespace,pvc,node}` | gauge | 1 when an attached volume has a running replica on its own node |
-| `lra_admissions_total{outcome}` | counter | `injected`, `no-local-replica`, `cache-cold`, `decode` |
+| `lra_admissions_total{outcome}` | counter | `injected`, `no-local-replica`, `pre-scheduled`, `cache-cold`, `decode` |
 | `lra_data_locality_flips_total{direction}` | counter | `borrow` / `restore` |
 | `lra_volume_unfixable{namespace,pvc,reason}` | gauge | the reconciler will not move this one: `too-large`, `longhorn-managed` |
 | `lra_build_info{version}` | gauge | always 1 |

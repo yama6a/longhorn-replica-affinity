@@ -60,6 +60,13 @@ func (a *Admitter) Review(req *admissionv1.AdmissionRequest) (*admissionv1.Admis
 		return resp, d
 	}
 
+	// A pod created with a node already chosen never reaches the scheduler, so affinity
+	// on it is dead weight the API server will carry for the pod's whole life.
+	if pod.Spec.NodeName != "" {
+		d.Skipped = "pre-scheduled"
+		return resp, d
+	}
+
 	nodes, matched := a.targets(&pod, req.Namespace)
 	d.Nodes, d.Volumes = nodes, matched
 	if len(nodes) == 0 {
