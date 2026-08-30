@@ -102,14 +102,32 @@ jobs:
           cache-to: type=gha,mode=max
 
       # Tag only after the push, so a tag always has an image.
+      #
+      # Retried because this endpoint has returned a one-off 403 "Resource not accessible
+      # by integration" on a run whose token demonstrably had Contents: write, between two
+      # identical runs that succeeded. Cause unknown, assumed transient. Without the retry
+      # the release is only recovered on the NEXT merge, by the backlog logic above.
       - name: Create GitHub release
         if: steps.version.outputs.version != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          gh release create "$VERSION" \
-            --target "${{ github.sha }}" \
-            --title "$VERSION" \
-            --generate-notes \
-            --notes "Image: \`ghcr.io/${GITHUB_REPOSITORY}:${VERSION}\`"
+          set -uo pipefail
+          for attempt in 1 2 3 4; do
+            if gh release view "$VERSION" >/dev/null 2>&1; then
+              echo "${VERSION} already exists"     # a retry that half-succeeded
+              exit 0
+            fi
+            if gh release create "$VERSION" \
+              --target "${{ github.sha }}" \
+              --title "$VERSION" \
+              --generate-notes \
+              --notes "Image: \`ghcr.io/${GITHUB_REPOSITORY}:${VERSION}\`"; then
+              exit 0
+            fi
+            echo "::warning::release create failed (attempt ${attempt}/4)"
+            sleep $((attempt * 15))
+          done
+          echo "::error::could not create ${VERSION} after 4 attempts"
+          exit 1
