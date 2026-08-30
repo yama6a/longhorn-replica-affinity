@@ -50,6 +50,15 @@ jobs:
       - name: Install golangci-lint
         run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$(go env GOPATH)/bin"
 
+      # setup-go caches GOMODCACHE and GOCACHE; golangci-lint keeps its own analysis cache
+      # elsewhere, and re-analysing every package from scratch is most of the lint time.
+      - name: restore golangci-lint cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/golangci-lint
+          key: golangci-${{ runner.os }}-${{ hashFiles('go.sum', '.golangci.yaml') }}
+          restore-keys: golangci-${{ runner.os }}-
+
       # `run` does not enforce the formatters, so check them separately.
       - name: format
         run: golangci-lint fmt --diff
@@ -132,6 +141,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: restore npm cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-renovate
       - name: yamllint
         run: pipx run yamllint -c .yamllint.yml .
       - name: actionlint
