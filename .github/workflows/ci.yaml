@@ -5,6 +5,11 @@ on:
     branches: [main]
     # labeled/unlabeled so the gate re-runs on a label change, not just on a push.
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  # A run can only restore caches from its own branch or the DEFAULT branch, so without a
+  # run on main nothing ever populates a cache a fresh PR branch can see, and every PR
+  # pays the cold-cache cost. This also means main itself is verified, not just the PR.
+  push:
+    branches: [main]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -16,6 +21,8 @@ permissions:
 jobs:
   release-label:
     name: release label
+    # A push to main carries no PR labels; the gate belongs on the PR that precedes it.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Exactly one release label
