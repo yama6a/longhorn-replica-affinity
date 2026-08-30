@@ -244,6 +244,20 @@ func TestReviewRWXWithoutShareManager(t *testing.T) {
 	}
 }
 
+func TestReviewSkipsPreScheduledPod(t *testing.T) {
+	t.Parallel()
+	a := newAdmitter(rwoLookup(), false)
+	pod := podWithClaims("config")
+	pod.Spec.NodeName = "tc-w1"
+	resp, d := a.Review(review(t, pod, "media"))
+	if resp.Patch != nil {
+		t.Fatal("a pod that bypasses the scheduler must not be patched")
+	}
+	if d.Skipped != "pre-scheduled" {
+		t.Fatalf("want pre-scheduled, got %q", d.Skipped)
+	}
+}
+
 func TestReviewEchoesUID(t *testing.T) {
 	t.Parallel()
 	a := newAdmitter(rwoLookup(), false)
