@@ -142,7 +142,10 @@ Every merge to `main` cuts one. CI fails a PR without exactly one of:
 Renovate labels its own PRs `patch`: a dependency bump does not move this tool's flags,
 env or behaviour. Relabel by hand on the rare one that does.
 
-A direct push to `main` has no PR, so it ships nothing.
+The bump is recomputed from every PR merged since the last release, strongest label
+winning, so a run that fails or gets cancelled by the concurrency queue is absorbed by the
+next one rather than losing its release. `skip-release` only suppresses when nothing else
+in the backlog asked for a release.
 
 Builds `linux/amd64` and `linux/arm64` into one manifest list, pushes to GHCR, and only
 then tags, so a tag always has an image. No floating `:latest`.
