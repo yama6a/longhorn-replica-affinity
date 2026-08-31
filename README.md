@@ -164,6 +164,24 @@ The certificate must cover
 `<release>-webhook.<namespace>.svc`, and the Secret needs the usual `tls.crt` / `tls.key`.
 The file is re-read every 60 seconds, so rotation needs no restart either way.
 
+## A real deployment
+
+[yama6a/offgrid#50](https://github.com/yama6a/offgrid/pull/50) wires this into a 4-node
+Talos cluster end to end, if you want a worked example rather than a values file:
+
+- the [ArgoCD Application](https://github.com/yama6a/offgrid/blob/main/argo_apps/platform/apps/templates/03_longhorn_replica_affinity.yaml),
+  including the `ignoreDifferences` that `self-signed` mode needs
+- a [thin wrapper chart](https://github.com/yama6a/offgrid/tree/main/argo_apps/platform/charts/03_longhorn_replica_affinity)
+  that adds only a `CiliumNetworkPolicy`
+- the opt-in label reaching pods through CNPG `inheritedMetadata`, a RabbitMQ
+  `override.statefulSet`, and VictoriaMetrics `podMetadata`
+- [docs/15_replica_affinity.md](https://github.com/yama6a/offgrid/blob/main/docs/15_replica_affinity.md)
+  for the reasoning and the verification commands
+
+Measured there: **15 of 31 attached volumes had a replica on their pod's node before, 30 of
+31 after.** The one that never converges is a CloudNativePG instance whose required
+hostname anti-affinity outranks the preference, which is the correct outcome.
+
 ## Opting in
 
 Label the **pod**. `spec.affinity` is immutable, so nothing changes until a pod is
