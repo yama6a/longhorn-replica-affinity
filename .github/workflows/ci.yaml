@@ -23,7 +23,7 @@ jobs:
     name: release label
     # A push to main carries no PR labels; the gate belongs on the PR that precedes it.
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - name: Exactly one release label
         env:
@@ -39,7 +39,7 @@ jobs:
           echo "release label: ${picked}"
 
   go:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -98,13 +98,13 @@ jobs:
           done
 
   chart:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: install kubeconform
         run: |
-          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+          curl -fsSL "https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-$(dpkg --print-architecture).tar.gz" \
             | tar xz kubeconform && sudo mv kubeconform /usr/local/bin/
 
       # The chart ships at the same version as the image, so a chart that does not render
@@ -153,7 +153,7 @@ jobs:
           exit $fail
 
   meta:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: restore npm cache
