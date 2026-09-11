@@ -1,56 +1,27 @@
 {
   // Cadence is the cron in .github/workflows/renovate.yaml, not an internal `schedule`, so a manual
   // workflow_dispatch works too.
+  //
+  // The shared presets carry the grouping, automerge and digest-pinning rules. Only what is specific
+  // to this repo lives below.
+  // WARNING: the combined non-major PR automerges, and every automerged bump cuts a release, because
+  // merging to main runs release.yaml. Add minimumReleaseAge to slow that down.
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   extends: [
-    "config:recommended",
-    ":dependencyDashboard", // one issue listing every pending/failed update (needs repo Issues enabled)
-    "helpers:pinGitHubActionDigestsToSemver", // action pins carry a readable version alongside the digest
+    "github>yama6a/gha:default.json5",
+    "github>yama6a/gha:go.json5",
   ],
-  prConcurrentLimit: 12,
-  prHourlyLimit: 0, // no hourly throttle
-  dependencyDashboardTitle: "Renovate dependency dashboard",
 
   // ci.yaml fails any PR without a release label, so an unlabelled Renovate PR could never merge. A
   // dependency bump does not move this tool's flags, env or behaviour, so patch is right for all of them.
   labels: ["patch"],
 
-  // A gomod bump can leave transitive requirements stale in go.mod.
-  postUpdateOptions: ["gomodTidy"],
-
   packageRules: [
-    {
-      // WARNING: every automerged bump cuts a release, because merging to main runs release.yaml.
-      // Add minimumReleaseAge or drop automerge here to slow that down.
-      description: "combine all non-major updates into one auto-merged PR",
-      matchUpdateTypes: ["minor", "patch", "digest", "pin", "lockFileMaintenance"],
-      groupName: "all non-major dependencies",
-      automerge: true,
-    },
-    {
-      // Must come AFTER the rule above, which is what makes it win. Renovate DID automerge major action
-      // bumps without this, despite them being excluded from that rule's matchUpdateTypes.
-      description: "majors are reviewed by hand, never automerged",
-      matchUpdateTypes: ["major"],
-      automerge: false,
-    },
     {
       // Released together, types cross-reference, so a partial bump does not compile.
       description: "keep the kubernetes libraries in lockstep",
       matchPackageNames: ["k8s.io/api", "k8s.io/apimachinery", "k8s.io/client-go"],
       groupName: "kubernetes libraries",
-    },
-    {
-      // So a moving tag cannot swap an action's code under us.
-      description: "pin github action refs to digests",
-      matchManagers: ["github-actions"],
-      pinDigests: true,
-    },
-    {
-      // Both are rolling tags, so a digest is the only thing Renovate can track.
-      description: "pin base images to digests",
-      matchManagers: ["dockerfile"],
-      pinDigests: true,
     },
   ],
 }
