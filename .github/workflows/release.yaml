@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write # create the GitHub release
+  contents: write # create the tag and the GitHub release
   packages: write # or the image and chart push fails with permission_denied
   id-token: write # mints the OIDC token the attestation is signed with
   attestations: write # stores the attestation
@@ -80,7 +80,7 @@ jobs:
           echo "${LATEST} + ${KIND} -> ${next}"
           echo "version=${next}" >> "$GITHUB_OUTPUT"
 
-  # Builds, scans, attests and pushes the image, and creates the GitHub release for this version.
+  # Builds, scans, attests and pushes the image. The release is tagged below, once the chart is up too.
   image:
     needs: bump
     if: needs.bump.outputs.version != ''
@@ -88,19 +88,22 @@ jobs:
     with:
       dockerfile: .build/Dockerfile
       version: ${{ needs.bump.outputs.version }}
+      build-args: |
+        VERSION=${{ needs.bump.outputs.version }}
+      create-release: false
 
-  # Same version as the image, packaged from the tree that produced it, so a chart can never point at an
-  # image tag that was never built.
   chart:
     needs: [bump, image]
     if: needs.bump.outputs.version != ''
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      packages: write
+      contents: write # create the tag and the GitHub release
+      packages: write # or the chart push fails with permission_denied
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Same version as the image, packaged from the tree that produced it, so a chart can never point at an
+      # image tag that was never built. Pushed before the git tag for the same reason the image is.
       - name: Package and push the Helm chart
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -113,3 +116,33 @@ jobs:
             --version "${VERSION#v}" --app-version "${VERSION}" --destination /tmp/chart
           helm push "/tmp/chart/longhorn-replica-affinity-${VERSION#v}.tgz" \
             "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts"
+
+      # Tag only after both pushes, so a tag always has an image and a chart.
+      #
+      # Retried because this endpoint has returned a one-off 403 "Resource not accessible
+      # by integration" on a run whose token demonstrably had Contents: write, between two
+      # identical runs that succeeded. Cause unknown, assumed transient. Without the retry
+      # the release is only recovered on the NEXT merge, by the backlog logic above.
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.bump.outputs.version }}
+        run: |
+          set -uo pipefail
+          for attempt in 1 2 3 4; do
+            if gh release view "$VERSION" >/dev/null 2>&1; then
+              echo "${VERSION} already exists"     # a retry that half-succeeded
+              exit 0
+            fi
+            if gh release create "$VERSION" \
+              --target "${{ github.sha }}" \
+              --title "$VERSION" \
+              --generate-notes \
+              --notes "Image: \`ghcr.io/${GITHUB_REPOSITORY}:${VERSION}\`"; then
+              exit 0
+            fi
+            echo "::warning::release create failed (attempt ${attempt}/4)"
+            sleep $((attempt * 15))
+          done
+          echo "::error::could not create ${VERSION} after 4 attempts"
+          exit 1
