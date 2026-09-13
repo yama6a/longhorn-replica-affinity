@@ -39,73 +39,26 @@ jobs:
           echo "release label: ${picked}"
 
   go:
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      # A stale go.mod/go.sum still builds, so nothing else here would catch it.
-      - name: go mod tidy is committed
-        run: |
-          go mod tidy
-          git diff --exit-code -- go.mod go.sum \
-            || { echo "::error::go.mod/go.sum are not tidy; run 'make tidy' and commit"; exit 1; }
-
-      - name: Install golangci-lint
-        run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$(go env GOPATH)/bin"
-
-      # setup-go caches GOMODCACHE and GOCACHE; golangci-lint keeps its own analysis cache
-      # elsewhere, and re-analysing every package from scratch is most of the lint time.
-      - name: restore golangci-lint cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/golangci-lint
-          key: golangci-${{ runner.os }}-${{ hashFiles('go.sum', '.golangci.yaml') }}
-          restore-keys: golangci-${{ runner.os }}-
-
-      # `run` does not enforce the formatters, so check them separately.
-      - name: format
-        run: golangci-lint fmt --diff
-
-      - name: vet + lint
-        run: |
-          go vet ./...
-          golangci-lint run ./... -c .golangci.yaml
-
-      # -race is the point: the cert bootstrap and the informer-backed index are both read
-      # concurrently with the admission path.
-      - name: test
-        run: go test ./... -race -count=1 -coverprofile=cover.out
-
-      - name: coverage summary
-        run: go tool cover -func=cover.out | tail -1
-
-      - name: govulncheck
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          "$(go env GOPATH)/bin/govulncheck" ./...
-
-      # The image is a manifest list, so a compile error on the arch CI does not run on
-      # would only surface at release time.
-      - name: cross-compile both release targets
-        run: |
-          for arch in amd64 arm64; do
-            echo "building linux/$arch"
-            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build ./...
-          done
+    uses: yama6a/gha/.github/workflows/go-ci.yaml@v1
+    with:
+      tidy-check: true
+      fmt-check: true  # `run` does not enforce the formatters
+      race: true  # the cert bootstrap and the informer-backed index are both read concurrently with the admission path
+      coverage: true
+      test-args: -count=1  # setup-go restores GOCACHE, so go test would otherwise serve cached results
+      # The image is a manifest list, so a compile error on the arch CI does not run on would
+      # only surface at release time.
+      cross-compile: |
+        linux/amd64
+        linux/arm64
 
   chart:
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: install kubeconform
-        run: |
-          curl -fsSL "https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-$(dpkg --print-architecture).tar.gz" \
-            | tar xz kubeconform && sudo mv kubeconform /usr/local/bin/
+      # Install only; each values combination below is piped in on stdin, one at a time.
+      - uses: yama6a/gha/.github/actions/kubeconform@v1
 
       # The chart ships at the same version as the image, so a chart that does not render
       # is a broken release. Every values combination is rendered, because a conditional
@@ -114,7 +67,6 @@ jobs:
         run: |
           set -euo pipefail
           helm lint charts/longhorn-replica-affinity
-          schema='https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
           cases=(
             "defaults|"
             "provided + cert-manager|--set tls.mode=provided --set tls.certManager.enabled=true"
@@ -139,8 +91,8 @@ jobs:
             if [ "$n" -lt 5 ]; then
               echo "::error::$name rendered only $n resources"; fail=1
             fi
-            kubeconform -strict -ignore-missing-schemas -summary \
-              -schema-location default -schema-location "$schema" <<<"$out" || fail=1
+            # shellcheck disable=SC2086
+            kubeconform $KUBECONFORM_ARGS <<<"$out" || fail=1
             # Helm parses a large YAML integer as float64, so `| quote` alone renders
             # "5.36870912e+09" and the binary rejects it at startup. It renders and
             # conforms perfectly, so only checking the value itself catches it.
@@ -156,17 +108,8 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: restore npm cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: yama6a/gha/.github/actions/yaml-checks@v1
+      # A broken config silently halts ALL dependency updates.
+      - uses: yama6a/gha/.github/actions/validate-renovate-config@v1
         with:
-          path: ~/.npm
-          key: npm-${{ runner.os }}-renovate
-      - name: yamllint
-        run: pipx run yamllint -c .yamllint.yml .
-      - name: actionlint
-        run: |
-          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
-          ./actionlint -color
-      # Renovate silently falls back to its defaults on a broken config.
-      - name: Validate renovate config
-        run: npx --yes --package renovate -- renovate-config-validator --strict
+          config-file: renovate.json5
