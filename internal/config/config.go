@@ -80,34 +80,49 @@ func Load() (Config, error) {
 		return c, fmt.Errorf("LRA_TLS_MODE must be %q or %q, got %q", TLSModeSelfSigned, TLSModeProvided, c.TLSMode)
 	}
 
+	if err := loadWebhook(&c); err != nil {
+		return c, err
+	}
+	if err := loadReconciler(&c); err != nil {
+		return c, err
+	}
+	return c, nil
+}
+
+func loadWebhook(c *Config) error {
 	var err error
 	if c.Weight, err = envInt32("LRA_WEIGHT", 30); err != nil {
-		return c, err
+		return err
 	}
 	if c.Weight < 1 || c.Weight > 100 {
-		return c, fmt.Errorf("LRA_WEIGHT must be 1-100, got %d", c.Weight)
+		return fmt.Errorf("LRA_WEIGHT must be 1-100, got %d", c.Weight)
 	}
 	if c.SkipRWX, err = envBool("LRA_SKIP_RWX", false); err != nil {
-		return c, err
+		return err
 	}
+	return nil
+}
+
+func loadReconciler(c *Config) error {
+	var err error
 	if c.ReconcileInterval, err = envDuration("LRA_RECONCILE_INTERVAL", time.Minute); err != nil {
-		return c, err
+		return err
 	}
 	if c.Dwell, err = envDuration("LRA_DWELL", 30*time.Minute); err != nil {
-		return c, err
+		return err
 	}
 	if c.MaxMoveBytes, err = envInt64("LRA_MAX_MOVE_BYTES", 5<<30); err != nil {
-		return c, err
+		return err
 	}
 	// Backstop: a volume Longhorn never trims back would otherwise pin best-effort on
 	// forever, which is the volume-follows-pod behaviour the borrow exists to avoid.
 	if c.MaxBorrow, err = envDuration("LRA_MAX_BORROW", time.Hour); err != nil {
-		return c, err
+		return err
 	}
 	if c.FlipDataLocality, err = envBool("LRA_FLIP_DATA_LOCALITY", true); err != nil {
-		return c, err
+		return err
 	}
-	return c, nil
+	return nil
 }
 
 func env(k, def string) string {

@@ -1,0 +1,5 @@
+schemaRoot:
+  title: longhorn-replica-affinity values
+  # Strict: a typo in a values key is silently ignored otherwise, and this chart's keys all
+  # gate real behaviour.
+  additionalProperties: false

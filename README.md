@@ -250,23 +250,26 @@ winning, so a run that fails or gets cancelled by the concurrency queue is absor
 next one rather than losing its release. `skip-release` only suppresses when nothing else
 in the backlog asked for a release.
 
-Builds `linux/amd64` and `linux/arm64` into one manifest list, packages the chart at the
-same version with the image pinned as its `appVersion`, pushes both to GHCR, and only then
-creates the git tag. So a tag always has an image, and a chart can never reference an image
-that was never built. No floating `:latest`.
+Builds `linux/amd64` and `linux/arm64` into one manifest list, scans it, signs a
+provenance attestation, packages the chart at the same version with the image pinned as
+its `appVersion`, pushes both to GHCR, and only then creates the git tag. So a tag always
+has an image, and a chart can never reference an image that was never built. No floating
+`:latest`.
 
 ## Development
 
 ```bash
-make ci         # fmt + vet + lint + race tests + govulncheck + chart render
+make ci         # tidy and generate drift + fmt + lint + vet + race tests + govulncheck + chart
 make build
-make chart      # helm lint + render every values combination
+make chart      # helm lint + unit tests + render
 make image      # multi-arch, no push
 ```
 
 Everything that decides anything is a pure function over an interface, so the tests need
-no cluster. CI additionally runs kubeconform over every rendered chart combination,
-actionlint, yamllint, a `go mod tidy` check and a cross-compile of both release targets.
+no cluster. Every values combination the chart supports is a helm-unittest case under
+`charts/longhorn-replica-affinity/tests/`. CI additionally runs kubeconform over the
+rendered chart, a `values.schema.json` drift check, actionlint, yamllint and a
+cross-compile of both release targets.
 
 ## Prior art
 

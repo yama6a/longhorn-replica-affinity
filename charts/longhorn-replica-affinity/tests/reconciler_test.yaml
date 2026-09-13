@@ -1,0 +1,49 @@
+suite: reconciler env
+release:
+  name: lra
+  namespace: lra
+templates:
+  - templates/deployment-reconciler.yaml
+tests:
+  # Helm parses a large YAML integer as a float64, so `| quote` alone renders
+  # "5.36870912e+09" and the binary rejects it at startup. It is valid YAML and passes
+  # kubeconform, so only the value itself catches it.
+  - it: renders the default maxMoveBytes as a plain integer string
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LRA_MAX_MOVE_BYTES
+            value: "5368709120"
+
+  - it: renders an overridden maxMoveBytes as a plain integer string
+    set:
+      reconciler.maxMoveBytes: 1099511627776
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LRA_MAX_MOVE_BYTES
+            value: "1099511627776"
+
+  - it: carries the reconciler timers through
+    set:
+      reconciler.intervalSeconds: 90
+      reconciler.dwell: 45m
+      reconciler.maxBorrow: 2h
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LRA_RECONCILE_INTERVAL
+            value: 90s
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LRA_DWELL
+            value: 45m
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LRA_MAX_BORROW
+            value: 2h

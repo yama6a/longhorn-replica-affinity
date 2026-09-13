@@ -21,8 +21,10 @@ import (
 )
 
 var (
+	//nolint:gochecknoglobals // a GroupVersionResource is a struct, so Go has no const form for it
 	ReplicaGVR = schema.GroupVersionResource{Group: "longhorn.io", Version: "v1beta2", Resource: "replicas"}
-	VolumeGVR  = schema.GroupVersionResource{Group: "longhorn.io", Version: "v1beta2", Resource: "volumes"}
+	//nolint:gochecknoglobals // same, and the reconciler addresses this exact resource too
+	VolumeGVR = schema.GroupVersionResource{Group: "longhorn.io", Version: "v1beta2", Resource: "volumes"}
 )
 
 // ShareManagerSelector matches the nfs-ganesha pod Longhorn runs per RWX volume.

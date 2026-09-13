@@ -12,11 +12,17 @@ concurrency:
 
 permissions:
   contents: write # create the tag and the GitHub release
-  packages: write # or the image push fails with permission_denied
+  packages: write # or the image and chart push fails with permission_denied
+  id-token: write # mints the OIDC token the attestation is signed with
+  attestations: write # stores the attestation
 
 jobs:
-  release:
+  bump:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -74,59 +80,53 @@ jobs:
           echo "${LATEST} + ${KIND} -> ${next}"
           echo "version=${next}" >> "$GITHUB_OUTPUT"
 
-      - name: Log in to GHCR
-        if: steps.version.outputs.version != ''
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+  # Builds, scans, attests and pushes the image. The release is tagged below, once the chart is up too.
+  image:
+    needs: bump
+    if: needs.bump.outputs.version != ''
+    uses: yama6a/gha/.github/workflows/docker-build-release.yaml@v2
+    with:
+      dockerfile: .build/Dockerfile
+      version: ${{ needs.bump.outputs.version }}
+      build-args: |
+        VERSION=${{ needs.bump.outputs.version }}
+      create-release: false
 
-      - name: Set up Docker Buildx
-        if: steps.version.outputs.version != ''
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-
-      - name: Build and push
-        if: steps.version.outputs.version != ''
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          file: .build/Dockerfile
-          platforms: linux/amd64,linux/arm64 # a manifest list, one image per arch
-          push: true
-          build-args: VERSION=${{ steps.version.outputs.version }}
-          # No :latest on purpose: this runs in the admission path, where a tag that moves
-          # under a cluster is the wrong kind of surprise.
-          tags: ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+  chart:
+    needs: [bump, image]
+    if: needs.bump.outputs.version != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the tag and the GitHub release
+      packages: write # or the chart push fails with permission_denied
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Same version as the image, packaged from the tree that produced it, so a chart can never point at an
       # image tag that was never built. Pushed before the git tag for the same reason the image is.
       - name: Package and push the Helm chart
-        if: steps.version.outputs.version != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.version.outputs.version }}
+          ACTOR: ${{ github.actor }}
+          VERSION: ${{ needs.bump.outputs.version }}
         run: |
           set -euo pipefail
-          echo "${GH_TOKEN}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          echo "${GH_TOKEN}" | helm registry login ghcr.io -u "${ACTOR}" --password-stdin
           helm package charts/longhorn-replica-affinity \
             --version "${VERSION#v}" --app-version "${VERSION}" --destination /tmp/chart
           helm push "/tmp/chart/longhorn-replica-affinity-${VERSION#v}.tgz" \
             "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts"
 
-      # Tag only after the push, so a tag always has an image.
+      # Tag only after both pushes, so a tag always has an image and a chart.
       #
       # Retried because this endpoint has returned a one-off 403 "Resource not accessible
       # by integration" on a run whose token demonstrably had Contents: write, between two
       # identical runs that succeeded. Cause unknown, assumed transient. Without the retry
       # the release is only recovered on the NEXT merge, by the backlog logic above.
       - name: Create GitHub release
-        if: steps.version.outputs.version != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.bump.outputs.version }}
         run: |
           set -uo pipefail
           for attempt in 1 2 3 4; do

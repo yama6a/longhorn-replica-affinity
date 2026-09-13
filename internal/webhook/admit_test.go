@@ -2,10 +2,9 @@ package webhook
 
 import (
 	"encoding/json"
-	"io"
-	"log/slog"
 	"testing"
 
+	"go.uber.org/zap"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -64,7 +63,7 @@ func review(t *testing.T, pod *corev1.Pod, ns string) *admissionv1.AdmissionRequ
 func newAdmitter(l Lookup, skipRWX bool) *Admitter {
 	return &Admitter{
 		Index: l, Weight: 30, SkipRWX: skipRWX,
-		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Log: zap.NewNop(),
 	}
 }
 

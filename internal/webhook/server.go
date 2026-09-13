@@ -7,11 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
 	admissionv1 "k8s.io/api/admission/v1"
 
 	"github.com/yama6a/longhorn-replica-affinity/internal/metrics"
@@ -28,7 +28,7 @@ type Server struct {
 	Addr     string
 	Certs    CertSource
 	Admitter *Admitter
-	Log      *slog.Logger
+	Log      *zap.Logger
 
 	mu   sync.RWMutex
 	cert *tls.Certificate
@@ -70,7 +70,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		_ = srv.Shutdown(shutdown)
 	}()
 
-	s.Log.Info("webhook listening", "addr", s.Addr)
+	s.Log.Info("webhook listening", zap.String("addr", s.Addr))
 	if err := srv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve: %w", err)
 	}
@@ -93,15 +93,15 @@ func (s *Server) handleMutate(w http.ResponseWriter, r *http.Request) {
 	resp, d := s.Admitter.Review(review.Request)
 	metrics.Admission(d.Skipped, len(d.Nodes) > 0)
 	if d.Skipped != "" {
-		s.Log.Debug("skipped", "ns", d.Namespace, "pod", d.Pod, "reason", d.Skipped)
+		s.Log.Debug("skipped", zap.String("ns", d.Namespace), zap.String("pod", d.Pod), zap.String("reason", d.Skipped))
 	} else {
-		s.Log.Info("injected", "ns", d.Namespace, "pod", d.Pod, "volumes", d.Volumes, "nodes", d.Nodes)
+		s.Log.Info("injected", zap.String("ns", d.Namespace), zap.String("pod", d.Pod), zap.Int("volumes", d.Volumes), zap.Strings("nodes", d.Nodes))
 	}
 
 	out := admissionv1.AdmissionReview{TypeMeta: review.TypeMeta, Response: resp}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(out); err != nil {
-		s.Log.Error("write response", "err", err)
+		s.Log.Error("write response", zap.Error(err))
 	}
 }
 
@@ -129,7 +129,7 @@ func (s *Server) watchCert(ctx context.Context) {
 			return
 		case <-t.C:
 			if err := s.loadCert(ctx); err != nil {
-				s.Log.Error("reload cert", "err", err)
+				s.Log.Error("reload cert", zap.Error(err))
 			}
 		}
 	}

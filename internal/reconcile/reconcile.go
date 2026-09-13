@@ -6,10 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"slices"
 	"time"
 
+	"go.uber.org/zap"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -39,7 +39,7 @@ type Reconciler struct {
 	Index Store
 	Dyn   dynamic.Interface
 	Kube  kubernetes.Interface
-	Log   *slog.Logger
+	Log   *zap.Logger
 
 	since    map[string]time.Time
 	borrowed map[string]time.Time // when each in-flight borrow started, for the backstop
@@ -105,35 +105,7 @@ func (r *Reconciler) pass(ctx context.Context) {
 }
 
 func (r *Reconciler) considerBorrow(ctx context.Context, v index.Volume) {
-	if !r.Cfg.FlipDataLocality || v.Restore != "" {
-		return // already borrowed; Longhorn is mid-rebuild
-	}
-
-	// Never move an rwx volume. Its attached node is the share-manager's, and a
-	// share-manager is a pod, so the webhook moves IT onto a replica instead. Copying a
-	// shared volume around would be the exact thing this project exists to avoid.
-	// (strict-local is documented as incompatible with rwx anyway.)
-	if v.RWX() {
-		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "rwx-share-manager-moves")
-		return
-	}
-
-	opted, err := r.optedIn(ctx, v)
-	if err != nil {
-		r.Log.Error("check opt-in", "volume", v.Name, "err", err)
-		return
-	}
-	if !opted {
-		return
-	}
-
-	if v.DataLocality != "disabled" {
-		// Already best-effort or strict-local. Longhorn owns the outcome; nothing to borrow.
-		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "longhorn-managed")
-		return
-	}
-	if v.ActualSize > r.Cfg.MaxMoveBytes {
-		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "too-large")
+	if !r.borrowable(ctx, v) {
 		return
 	}
 
@@ -147,14 +119,52 @@ func (r *Reconciler) considerBorrow(ctx context.Context, v index.Volume) {
 	}
 
 	if err := r.patch(ctx, v.Name, bestEffort, v.DataLocality); err != nil {
-		r.Log.Error("borrow dataLocality", "volume", v.Name, "err", err)
+		r.Log.Error("borrow dataLocality", zap.String("volume", v.Name), zap.Error(err))
 		return
 	}
 	r.borrowed[v.Name] = r.now()
 	metrics.Flip("borrow")
 	r.Log.Info("borrowing dataLocality to pull a replica local",
-		"volume", v.Name, "pvc", v.Namespace+"/"+v.PVCName,
-		"node", v.AttachedNode, "bytes", v.ActualSize, "restore_to", v.DataLocality)
+		zap.String("volume", v.Name), zap.String("pvc", v.Namespace+"/"+v.PVCName),
+		zap.String("node", v.AttachedNode), zap.Int64("bytes", v.ActualSize),
+		zap.String("restore_to", v.DataLocality))
+}
+
+// borrowable reports whether the volume is one the reconciler may act on at all, before
+// the dwell window is considered.
+func (r *Reconciler) borrowable(ctx context.Context, v index.Volume) bool {
+	if !r.Cfg.FlipDataLocality || v.Restore != "" {
+		return false // already borrowed; Longhorn is mid-rebuild
+	}
+
+	// Never move an rwx volume. Its attached node is the share-manager's, and a
+	// share-manager is a pod, so the webhook moves IT onto a replica instead. Copying a
+	// shared volume around would be the exact thing this project exists to avoid.
+	// (strict-local is documented as incompatible with rwx anyway.)
+	if v.RWX() {
+		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "rwx-share-manager-moves")
+		return false
+	}
+
+	opted, err := r.optedIn(ctx, v)
+	if err != nil {
+		r.Log.Error("check opt-in", zap.String("volume", v.Name), zap.Error(err))
+		return false
+	}
+	if !opted {
+		return false
+	}
+
+	if v.DataLocality != "disabled" {
+		// Already best-effort or strict-local. Longhorn owns the outcome; nothing to borrow.
+		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "longhorn-managed")
+		return false
+	}
+	if v.ActualSize > r.Cfg.MaxMoveBytes {
+		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "too-large")
+		return false
+	}
+	return true
 }
 
 // considerRestore ends a borrow, but only once Longhorn has finished the whole
@@ -175,20 +185,22 @@ func (r *Reconciler) considerRestore(ctx context.Context, v index.Volume, isLoca
 		// Give up waiting rather than leave best-effort on: that would drag a copy on
 		// every future reschedule, which is worse than one surplus replica.
 		r.Log.Warn("borrow held too long, restoring anyway",
-			"volume", v.Name, "pvc", v.Namespace+"/"+v.PVCName,
-			"local", isLocal, "replicas", have, "want", v.WantReplicas, "held", held.String())
+			zap.String("volume", v.Name), zap.String("pvc", v.Namespace+"/"+v.PVCName),
+			zap.Bool("local", isLocal), zap.Int("replicas", have),
+			zap.Int("want", v.WantReplicas), zap.Duration("held", held))
 	default:
 		return // still rebuilding, or Longhorn has not trimmed the surplus yet
 	}
 
 	if err := r.patch(ctx, v.Name, v.Restore, ""); err != nil {
-		r.Log.Error("restore dataLocality", "volume", v.Name, "err", err)
+		r.Log.Error("restore dataLocality", zap.String("volume", v.Name), zap.Error(err))
 		return
 	}
 	delete(r.borrowed, v.Name)
 	metrics.Flip("restore")
 	r.Log.Info("replica is local and replica count is back to normal, dataLocality restored",
-		"volume", v.Name, "pvc", v.Namespace+"/"+v.PVCName, "value", v.Restore)
+		zap.String("volume", v.Name), zap.String("pvc", v.Namespace+"/"+v.PVCName),
+		zap.String("value", v.Restore))
 }
 
 // patch sets spec.dataLocality. A non-empty restore parks the previous value in the
