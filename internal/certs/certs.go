@@ -83,14 +83,8 @@ func Ensure(ctx context.Context, kc kubernetes.Interface, cfg Config) (Bundle, e
 	if err != nil {
 		return Bundle{}, err
 	}
-	if found {
-		ok, err := usable(b, cfg)
-		if err != nil {
-			return Bundle{}, err
-		}
-		if ok {
-			return b, publish(ctx, kc, cfg, b.CACert)
-		}
+	if found && usable(b, cfg) {
+		return b, publish(ctx, kc, cfg, b.CACert)
 	}
 
 	fresh, err := generate(cfg)
@@ -117,27 +111,28 @@ func load(ctx context.Context, kc kubernetes.Interface, cfg Config) (Bundle, boo
 
 // usable reports whether a stored bundle is complete, parses, still covers every name the
 // apiserver dials, and is not near expiry.
-func usable(b Bundle, cfg Config) (bool, error) {
+func usable(b Bundle, cfg Config) bool {
 	if len(b.CACert) == 0 || len(b.TLSCert) == 0 || len(b.TLSKey) == 0 {
-		return false, nil
+		return false
 	}
 	block, _ := pem.Decode(b.TLSCert)
 	if block == nil {
-		return false, nil
+		return false
 	}
 	leaf, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return false, nil //nolint:nilerr // a corrupt cert is a reason to regenerate, not to fail
+		return false // a corrupt cert is a reason to regenerate, not to fail
 	}
 	if time.Now().Add(renewBefore).After(leaf.NotAfter) {
-		return false, nil
+		return false
 	}
 	for _, want := range cfg.dnsNames() {
+		// A renamed Service leaves the stored leaf covering the old name; regenerate for the new one.
 		if err := leaf.VerifyHostname(want); err != nil {
-			return false, nil //nolint:nilerr // the Service was renamed; regenerate for the new name
+			return false
 		}
 	}
-	return true, nil
+	return true
 }
 
 func generate(cfg Config) (Bundle, error) {

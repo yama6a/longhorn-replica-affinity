@@ -105,35 +105,7 @@ func (r *Reconciler) pass(ctx context.Context) {
 }
 
 func (r *Reconciler) considerBorrow(ctx context.Context, v index.Volume) {
-	if !r.Cfg.FlipDataLocality || v.Restore != "" {
-		return // already borrowed; Longhorn is mid-rebuild
-	}
-
-	// Never move an rwx volume. Its attached node is the share-manager's, and a
-	// share-manager is a pod, so the webhook moves IT onto a replica instead. Copying a
-	// shared volume around would be the exact thing this project exists to avoid.
-	// (strict-local is documented as incompatible with rwx anyway.)
-	if v.RWX() {
-		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "rwx-share-manager-moves")
-		return
-	}
-
-	opted, err := r.optedIn(ctx, v)
-	if err != nil {
-		r.Log.Error("check opt-in", zap.String("volume", v.Name), zap.Error(err))
-		return
-	}
-	if !opted {
-		return
-	}
-
-	if v.DataLocality != "disabled" {
-		// Already best-effort or strict-local. Longhorn owns the outcome; nothing to borrow.
-		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "longhorn-managed")
-		return
-	}
-	if v.ActualSize > r.Cfg.MaxMoveBytes {
-		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "too-large")
+	if !r.borrowable(ctx, v) {
 		return
 	}
 
@@ -156,6 +128,43 @@ func (r *Reconciler) considerBorrow(ctx context.Context, v index.Volume) {
 		zap.String("volume", v.Name), zap.String("pvc", v.Namespace+"/"+v.PVCName),
 		zap.String("node", v.AttachedNode), zap.Int64("bytes", v.ActualSize),
 		zap.String("restore_to", v.DataLocality))
+}
+
+// borrowable reports whether the volume is one the reconciler may act on at all, before
+// the dwell window is considered.
+func (r *Reconciler) borrowable(ctx context.Context, v index.Volume) bool {
+	if !r.Cfg.FlipDataLocality || v.Restore != "" {
+		return false // already borrowed; Longhorn is mid-rebuild
+	}
+
+	// Never move an rwx volume. Its attached node is the share-manager's, and a
+	// share-manager is a pod, so the webhook moves IT onto a replica instead. Copying a
+	// shared volume around would be the exact thing this project exists to avoid.
+	// (strict-local is documented as incompatible with rwx anyway.)
+	if v.RWX() {
+		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "rwx-share-manager-moves")
+		return false
+	}
+
+	opted, err := r.optedIn(ctx, v)
+	if err != nil {
+		r.Log.Error("check opt-in", zap.String("volume", v.Name), zap.Error(err))
+		return false
+	}
+	if !opted {
+		return false
+	}
+
+	if v.DataLocality != "disabled" {
+		// Already best-effort or strict-local. Longhorn owns the outcome; nothing to borrow.
+		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "longhorn-managed")
+		return false
+	}
+	if v.ActualSize > r.Cfg.MaxMoveBytes {
+		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "too-large")
+		return false
+	}
+	return true
 }
 
 // considerRestore ends a borrow, but only once Longhorn has finished the whole
