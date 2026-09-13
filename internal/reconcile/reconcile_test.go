@@ -3,11 +3,10 @@ package reconcile
 import (
 	"context"
 	"encoding/json"
-	"io"
-	"log/slog"
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -90,7 +89,7 @@ func run(t *testing.T, store Store, pods []*corev1.Pod, tweak func(*Reconciler))
 		Index: store,
 		Kube:  fake.NewClientset(objs...),
 		Dyn:   dynClient(t, &patches),
-		Log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Log:   zap.NewNop(),
 	}
 	if tweak != nil {
 		tweak(r)
@@ -229,7 +228,7 @@ func TestDwellResetsWhenVolumeBecomesLocal(t *testing.T) {
 		},
 		Index: store(misplaced(), "tc-w1"),
 		Kube:  fake.NewClientset(labelledPod("plex-1")),
-		Log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Log:   zap.NewNop(),
 	}
 	var patches []patchRecord
 	r.Dyn = dynClient(t, &patches)
@@ -331,7 +330,7 @@ func TestForgetsVanishedVolumes(t *testing.T) {
 		Cfg:   config.Config{LonghornNamespace: ns, Dwell: time.Hour, MaxMoveBytes: 5 << 30},
 		Index: fakeStore{},
 		Kube:  fake.NewClientset(),
-		Log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Log:   zap.NewNop(),
 	}
 	var patches []patchRecord
 	r.Dyn = dynClient(t, &patches)

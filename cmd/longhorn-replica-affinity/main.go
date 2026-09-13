@@ -6,11 +6,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -37,13 +38,15 @@ Configuration is by LRA_* environment variables; see the README.
 `
 
 func main() {
-	if err := run(); err != nil {
-		slog.Error("exit", "err", err)
+	log := newLogger()
+	zap.ReplaceGlobals(log)
+	if err := run(log); err != nil {
+		log.Error("exit", zap.Error(err))
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(log *zap.Logger) error {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, usage, version)
 		return errors.New("no subcommand")
@@ -53,8 +56,6 @@ func run() error {
 		return nil
 	}
 
-	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel()}))
-	slog.SetDefault(log)
 	metrics.SetVersion(version)
 
 	cfg, err := config.Load()
@@ -82,7 +83,7 @@ func run() error {
 	if err := idx.Run(ctx); err != nil {
 		return fmt.Errorf("warm caches: %w", err)
 	}
-	log.Info("caches warm", "version", version, "mode", os.Args[1])
+	log.Info("caches warm", zap.String("version", version), zap.String("mode", os.Args[1]))
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return metrics.Serve(gctx, cfg.MetricsAddr) })
@@ -111,7 +112,7 @@ func run() error {
 // certSource picks where the serving keypair comes from. Self-signed needs no
 // cert-manager: it mints a CA and leaf, parks them in a Secret so every replica agrees,
 // and publishes the CA into the webhook configuration's caBundle.
-func certSource(cfg config.Config, kc kubernetes.Interface, log *slog.Logger) webhook.CertSource {
+func certSource(cfg config.Config, kc kubernetes.Interface, log *zap.Logger) webhook.CertSource {
 	if cfg.TLSMode == config.TLSModeProvided {
 		return func(context.Context) ([]byte, []byte, error) {
 			crt, err := os.ReadFile(cfg.CertFile)
@@ -137,15 +138,23 @@ func certSource(cfg config.Config, kc kubernetes.Interface, log *slog.Logger) we
 		if err != nil {
 			return nil, nil, fmt.Errorf("ensure certificate: %w", err)
 		}
-		log.Debug("serving certificate ready", "secret", cfg.TLSSecret, "webhook", cfg.WebhookName)
+		log.Debug("serving certificate ready", zap.String("secret", cfg.TLSSecret), zap.String("webhook", cfg.WebhookName))
 		return b.TLSCert, b.TLSKey, nil
 	}
 }
 
-func logLevel() slog.Level {
-	var l slog.Level
-	if err := l.UnmarshalText([]byte(os.Getenv("LRA_LOG_LEVEL"))); err != nil {
-		return slog.LevelInfo
+func newLogger() *zap.Logger {
+	return zap.New(zapcore.NewCore(
+		zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()),
+		zapcore.AddSync(os.Stdout),
+		zap.NewAtomicLevelAt(logLevel()),
+	))
+}
+
+func logLevel() zapcore.Level {
+	l, err := zapcore.ParseLevel(os.Getenv("LRA_LOG_LEVEL"))
+	if err != nil {
+		return zapcore.InfoLevel
 	}
 	return l
 }

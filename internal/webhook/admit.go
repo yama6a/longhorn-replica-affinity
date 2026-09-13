@@ -3,8 +3,8 @@ package webhook
 
 import (
 	"encoding/json"
-	"log/slog"
 
+	"go.uber.org/zap"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 
@@ -36,7 +36,7 @@ type Admitter struct {
 	Index   Lookup
 	Weight  int32
 	SkipRWX bool
-	Log     *slog.Logger
+	Log     *zap.Logger
 }
 
 // Review handles one AdmissionReview and returns the response to send back.
@@ -46,7 +46,7 @@ func (a *Admitter) Review(req *admissionv1.AdmissionRequest) (*admissionv1.Admis
 	var pod corev1.Pod
 	if err := json.Unmarshal(req.Object.Raw, &pod); err != nil {
 		// Allowed anyway: this optimises placement, it never blocks it.
-		a.Log.Error("decode pod", "err", err)
+		a.Log.Error("decode pod", zap.Error(err))
 		return resp, Decision{Namespace: req.Namespace, Skipped: "decode"}
 	}
 
@@ -100,7 +100,7 @@ func (a *Admitter) patch(resp *admissionv1.AdmissionResponse, pod *corev1.Pod, n
 		"value": merged,
 	}})
 	if err != nil {
-		a.Log.Error("marshal patch", "err", err)
+		a.Log.Error("marshal patch", zap.Error(err))
 		d.Skipped = "patch"
 		return resp
 	}
