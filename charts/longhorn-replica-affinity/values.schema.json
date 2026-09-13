@@ -1,0 +1,206 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "longhorn-replica-affinity values",
+    "type": "object",
+    "properties": {
+        "fullnameOverride": {
+            "type": "string"
+        },
+        "global": {
+            "description": "Global values shared between all subcharts",
+            "$comment": "Added automatically by 'helm schema' to allow this chart to be used as a Helm dependency, as this schema would otherwise not allow Helm's special 'global' values key.",
+            "type": [
+                "object",
+                "null"
+            ]
+        },
+        "image": {
+            "type": "object",
+            "properties": {
+                "pullPolicy": {
+                    "type": "string"
+                },
+                "repository": {
+                    "type": "string"
+                },
+                "tag": {
+                    "type": "string"
+                }
+            }
+        },
+        "imagePullSecrets": {
+            "type": "array"
+        },
+        "labelKey": {
+            "type": "string"
+        },
+        "labelValue": {
+            "type": "string"
+        },
+        "logLevel": {
+            "type": "string"
+        },
+        "longhornNamespace": {
+            "type": "string"
+        },
+        "metricsPort": {
+            "type": "integer"
+        },
+        "nameOverride": {
+            "type": "string"
+        },
+        "podMonitor": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                },
+                "interval": {
+                    "type": "string"
+                },
+                "labels": {
+                    "type": "object"
+                }
+            }
+        },
+        "priorityClassName": {
+            "type": "string"
+        },
+        "reconciler": {
+            "type": "object",
+            "properties": {
+                "dwell": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "intervalSeconds": {
+                    "type": "integer"
+                },
+                "maxBorrow": {
+                    "type": "string"
+                },
+                "maxMoveBytes": {
+                    "type": "integer"
+                },
+                "nodeSelector": {
+                    "type": "object"
+                },
+                "podAnnotations": {
+                    "type": "object"
+                },
+                "tolerations": {
+                    "type": "array"
+                }
+            }
+        },
+        "resources": {
+            "type": "object",
+            "properties": {
+                "limits": {
+                    "type": "object",
+                    "properties": {
+                        "memory": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "requests": {
+                    "type": "object",
+                    "properties": {
+                        "cpu": {
+                            "type": "string"
+                        },
+                        "memory": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "serviceAccount": {
+            "type": "object",
+            "properties": {
+                "annotations": {
+                    "type": "object"
+                }
+            }
+        },
+        "shareManager": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "skipRWX": {
+            "type": "boolean"
+        },
+        "tls": {
+            "type": "object",
+            "properties": {
+                "certManager": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean"
+                        },
+                        "issuerRef": {
+                            "type": "object"
+                        }
+                    }
+                },
+                "mode": {
+                    "type": "string"
+                },
+                "secretName": {
+                    "type": "string"
+                }
+            }
+        },
+        "webhook": {
+            "type": "object",
+            "properties": {
+                "annotations": {
+                    "type": "object"
+                },
+                "excludedNamespaces": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "failurePolicy": {
+                    "type": "string"
+                },
+                "nodeSelector": {
+                    "type": "object"
+                },
+                "podAnnotations": {
+                    "type": "object"
+                },
+                "podAntiAffinity": {
+                    "type": "boolean"
+                },
+                "port": {
+                    "type": "integer"
+                },
+                "replicas": {
+                    "type": "integer"
+                },
+                "timeoutSeconds": {
+                    "type": "integer"
+                },
+                "tolerations": {
+                    "type": "array"
+                }
+            }
+        },
+        "weight": {
+            "type": "integer"
+        }
+    },
+    "additionalProperties": false
+}
