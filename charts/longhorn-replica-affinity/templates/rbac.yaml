@@ -1,0 +1,139 @@
+{{- $selfSigned := eq .Values.tls.mode "self-signed" -}}
+{{- /*
+Two ServiceAccounts, because only one of them writes. The webhook reads; the reconciler is the only thing that
+may patch a Longhorn volume, and may do nothing else.
+*/ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "lra.webhookName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "lra.labels" . | nindent 4 }}
+  {{- with .Values.serviceAccount.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "lra.fullname" . }}-read
+  labels: {{- include "lra.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["longhorn.io"]
+    resources: ["volumes", "replicas"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "lra.webhookName" . }}
+  labels: {{- include "lra.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ include "lra.fullname" . }}-read}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "lra.webhookName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- if $selfSigned }}
+---
+{{- /*
+Self-signed mode only. The pod mints its own certificate, so it needs to persist it and to publish its CA.
+Both are scoped as tightly as RBAC allows: one named Secret, one named MutatingWebhookConfiguration.
+If your policy forbids a workload holding patch on a MutatingWebhookConfiguration, use tls.mode=provided and
+none of this is rendered.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "lra.webhookName" . }}-certs
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "lra.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"] # create cannot be restricted by resourceName: the object does not exist yet
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ include "lra.tlsSecret" . | quote }}]
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "lra.webhookName" . }}-certs
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "lra.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "lra.webhookName" . }}-certs}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "lra.webhookName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "lra.webhookName" . }}-cabundle
+  labels: {{- include "lra.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["mutatingwebhookconfigurations"]
+    resourceNames: [{{ include "lra.fullname" . | quote }}]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "lra.webhookName" . }}-cabundle
+  labels: {{- include "lra.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ include "lra.webhookName" . }}-cabundle}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "lra.webhookName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- if .Values.reconciler.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "lra.reconcilerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "lra.labels" . | nindent 4 }}
+  {{- with .Values.serviceAccount.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "lra.reconcilerName" . }}
+  labels: {{- include "lra.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["longhorn.io"]
+    resources: ["volumes"]
+    verbs: ["patch"] # spec.dataLocality and the restore annotation, nothing else
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "lra.reconcilerName" . }}-read
+  labels: {{- include "lra.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ include "lra.fullname" . }}-read}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "lra.reconcilerName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "lra.reconcilerName" . }}
+  labels: {{- include "lra.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ include "lra.reconcilerName" . }}}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "lra.reconcilerName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

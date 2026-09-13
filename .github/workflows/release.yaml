@@ -1,0 +1,148 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+
+# Serialised so two runs cannot tag the same version. A cancelled run here loses nothing:
+# the next one recomputes the bump from every PR merged since the last release.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write # create the tag and the GitHub release
+  packages: write # or the image push fails with permission_denied
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # Every PR merged since the last release, not just the one that triggered this run.
+      # A concurrency group queues only ONE pending run, so a burst of merges silently
+      # cancels the runs in between; deriving the bump from the whole backlog means the
+      # next run absorbs whatever was dropped instead of losing those releases.
+      - name: Resolve bump since the last release
+        id: bump
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          latest=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // ""')
+          if [ -n "$latest" ]; then
+            range="${latest}..HEAD"
+          else
+            range="HEAD"
+          fi
+
+          labels=""
+          for sha in $(git rev-list "$range"); do
+            labels+=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${sha}/pulls" \
+              --jq '.[0].labels[]?.name' 2>/dev/null || true)$'\n'
+          done
+
+          # Strongest bump in the batch wins. skip-release only suppresses when nothing
+          # else in the backlog asked for a release.
+          kind=none
+          for want in patch minor major; do
+            grep -qx "$want" <<<"$labels" && kind=$want
+          done
+
+          echo "since ${latest:-<start>}: $(grep -c . <<<"$labels" || true) labels -> ${kind}"
+          echo "latest=${latest:-v0.0.0}" >> "$GITHUB_OUTPUT"
+          echo "kind=${kind}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute next version
+        id: version
+        if: steps.bump.outputs.kind != 'none'
+        env:
+          KIND: ${{ steps.bump.outputs.kind }}
+          LATEST: ${{ steps.bump.outputs.latest }}
+        run: |
+          set -euo pipefail
+          IFS=. read -r major minor patch <<<"${LATEST#v}"
+          case "$KIND" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          next="v${major}.${minor}.${patch}"
+          echo "${LATEST} + ${KIND} -> ${next}"
+          echo "version=${next}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        if: steps.version.outputs.version != ''
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        if: steps.version.outputs.version != ''
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Build and push
+        if: steps.version.outputs.version != ''
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: .build/Dockerfile
+          platforms: linux/amd64,linux/arm64 # a manifest list, one image per arch
+          push: true
+          build-args: VERSION=${{ steps.version.outputs.version }}
+          # No :latest on purpose: this runs in the admission path, where a tag that moves
+          # under a cluster is the wrong kind of surprise.
+          tags: ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Same version as the image, packaged from the tree that produced it, so a chart can never point at an
+      # image tag that was never built. Pushed before the git tag for the same reason the image is.
+      - name: Package and push the Helm chart
+        if: steps.version.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "${GH_TOKEN}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm package charts/longhorn-replica-affinity \
+            --version "${VERSION#v}" --app-version "${VERSION}" --destination /tmp/chart
+          helm push "/tmp/chart/longhorn-replica-affinity-${VERSION#v}.tgz" \
+            "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts"
+
+      # Tag only after the push, so a tag always has an image.
+      #
+      # Retried because this endpoint has returned a one-off 403 "Resource not accessible
+      # by integration" on a run whose token demonstrably had Contents: write, between two
+      # identical runs that succeeded. Cause unknown, assumed transient. Without the retry
+      # the release is only recovered on the NEXT merge, by the backlog logic above.
+      - name: Create GitHub release
+        if: steps.version.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -uo pipefail
+          for attempt in 1 2 3 4; do
+            if gh release view "$VERSION" >/dev/null 2>&1; then
+              echo "${VERSION} already exists"     # a retry that half-succeeded
+              exit 0
+            fi
+            if gh release create "$VERSION" \
+              --target "${{ github.sha }}" \
+              --title "$VERSION" \
+              --generate-notes \
+              --notes "Image: \`ghcr.io/${GITHUB_REPOSITORY}:${VERSION}\`"; then
+              exit 0
+            fi
+            echo "::warning::release create failed (attempt ${attempt}/4)"
+            sleep $((attempt * 15))
+          done
+          echo "::error::could not create ${VERSION} after 4 attempts"
+          exit 1

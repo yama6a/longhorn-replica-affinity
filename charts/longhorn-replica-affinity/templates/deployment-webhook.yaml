@@ -1,0 +1,99 @@
+{{- $selfSigned := eq .Values.tls.mode "self-signed" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lra.webhookName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lra.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+spec:
+  replicas: {{ .Values.webhook.replicas }}
+  revisionHistoryLimit: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "lra.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: webhook
+  template:
+    metadata:
+      labels:
+        {{- include "lra.labels" . | nindent 8 }}
+        app.kubernetes.io/component: webhook
+      {{- with .Values.webhook.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "lra.webhookName" . }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.webhook.podAntiAffinity }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: {{ include "lra.name" . }}
+                  app.kubernetes.io/instance: {{ .Release.Name }}
+                  app.kubernetes.io/component: webhook
+      {{- end }}
+      {{- with .Values.webhook.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.webhook.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: webhook
+          image: {{ include "lra.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["webhook"]
+          env:
+            - {name: LRA_LABEL_KEY, value: {{ .Values.labelKey | quote }}}
+            - {name: LRA_LABEL_VALUE, value: {{ .Values.labelValue | quote }}}
+            - {name: LRA_WEIGHT, value: {{ .Values.weight | quote }}}
+            - {name: LRA_SKIP_RWX, value: {{ .Values.skipRWX | quote }}}
+            - {name: LRA_LONGHORN_NAMESPACE, value: {{ .Values.longhornNamespace | quote }}}
+            - {name: LRA_LISTEN, value: ":{{ .Values.webhook.port }}"}
+            - {name: LRA_METRICS_LISTEN, value: ":{{ .Values.metricsPort }}"}
+            - {name: LRA_LOG_LEVEL, value: {{ .Values.logLevel | quote }}}
+            - {name: LRA_TLS_MODE, value: {{ .Values.tls.mode | quote }}}
+            {{- if $selfSigned }}
+            - {name: LRA_TLS_SECRET, value: {{ include "lra.tlsSecret" . | quote }}}
+            - {name: LRA_SERVICE_NAME, value: {{ include "lra.webhookName" . | quote }}}
+            - {name: LRA_WEBHOOK_NAME, value: {{ include "lra.fullname" . | quote }}}
+            - name: LRA_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            {{- end }}
+          ports:
+            - {name: webhook, containerPort: {{ .Values.webhook.port }}}
+            - {name: metrics, containerPort: {{ .Values.metricsPort }}}
+          readinessProbe:
+            # 503 until the informer caches are warm, so a pod never serves admission while it would answer
+            # "no local replica" for everything.
+            httpGet: {path: /healthz, port: webhook, scheme: HTTPS}
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources: {{ .Values.resources | toYaml | nindent 12 }}
+          {{- if not $selfSigned }}
+          volumeMounts:
+            - {name: tls, mountPath: /tls, readOnly: true}
+          {{- end }}
+      {{- if not $selfSigned }}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ include "lra.tlsSecret" . }}
+      {{- end }}

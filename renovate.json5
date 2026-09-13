@@ -1,0 +1,27 @@
+{
+  // Cadence is the cron in .github/workflows/renovate.yaml, not an internal `schedule`, so a manual
+  // workflow_dispatch works too.
+  //
+  // The shared presets carry the grouping, automerge and digest-pinning rules. Only what is specific
+  // to this repo lives below.
+  // WARNING: the combined non-major PR automerges, and every automerged bump cuts a release, because
+  // merging to main runs release.yaml. Add minimumReleaseAge to slow that down.
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [
+    "github>yama6a/gha:default.json5",
+    "github>yama6a/gha:go.json5",
+  ],
+
+  // ci.yaml fails any PR without a release label, so an unlabelled Renovate PR could never merge. A
+  // dependency bump does not move this tool's flags, env or behaviour, so patch is right for all of them.
+  labels: ["patch"],
+
+  packageRules: [
+    {
+      // Released together, types cross-reference, so a partial bump does not compile.
+      description: "keep the kubernetes libraries in lockstep",
+      matchPackageNames: ["k8s.io/api", "k8s.io/apimachinery", "k8s.io/client-go"],
+      groupName: "kubernetes libraries",
+    },
+  ],
+}

@@ -1,0 +1,4 @@
+/bin/
+cover.out
+.env.local
+.DS_Store

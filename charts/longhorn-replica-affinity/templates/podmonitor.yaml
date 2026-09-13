@@ -1,0 +1,20 @@
+{{- if .Values.podMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "lra.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lra.labels" . | nindent 4 }}
+    {{- with .Values.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "lra.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  podMetricsEndpoints:
+    - port: metrics
+      interval: {{ .Values.podMonitor.interval }}
+{{- end }}

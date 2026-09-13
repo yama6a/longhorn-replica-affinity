@@ -1,0 +1,12 @@
+apiVersion: v2
+name: longhorn-replica-affinity
+description: Schedules pods onto nodes that already hold a Longhorn replica of their data, so their IO stays off the network.
+type: application
+home: https://github.com/yama6a/longhorn-replica-affinity
+sources:
+  - https://github.com/yama6a/longhorn-replica-affinity
+keywords: [longhorn, storage, scheduling, data-locality, admission-webhook]
+# version and appVersion are both overwritten at package time with the release tag, so the chart and the image
+# it defaults to can never drift apart. The values here only matter for a local `helm template`.
+version: 0.0.0
+appVersion: "0.0.0"
