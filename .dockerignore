@@ -1,0 +1,10 @@
+/.git
+/.github
+/.build
+/bin
+/charts
+cover.out
+.env.local
+.DS_Store
+*.md
+LICENSE
