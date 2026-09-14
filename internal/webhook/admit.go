@@ -28,6 +28,7 @@ type Lookup interface {
 	VolumeNameForClaim(namespace, name string) (string, bool)
 	Volume(name string) (index.Volume, bool)
 	ReplicaNodes(volume string) []string
+	ReplicaNodesOnDisk(volume string) []string
 	ShareManagerNode(volume string) string
 }
 
@@ -69,9 +70,13 @@ func (a *Admitter) Review(req *admissionv1.AdmissionRequest) (*admissionv1.Admis
 
 	// A share-manager is itself a pod, so the RWX hop from it to its replicas is fixed by
 	// moving it, not by dragging the volume to it.
+	//
+	// On-disk rather than running: Longhorn stops the engine and every replica before it
+	// recreates the share-manager, so at admission time there is normally no running
+	// replica to prefer. Where the data sits does not change while the process is down.
 	if index.IsShareManager(podName(&pod, req)) {
 		d.ShareManager = true
-		nodes := a.Index.ReplicaNodes(index.VolumeForShareManager(podName(&pod, req)))
+		nodes := a.Index.ReplicaNodesOnDisk(index.VolumeForShareManager(podName(&pod, req)))
 		d.Nodes, d.Volumes = nodes, len(nodes)
 		if len(nodes) == 0 {
 			d.Skipped = "no-local-replica"

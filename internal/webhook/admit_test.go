@@ -18,6 +18,7 @@ type fakeLookup struct {
 	claims   map[string]string
 	volumes  map[string]index.Volume
 	replicas map[string][]string
+	onDisk   map[string][]string
 	shares   map[string]string
 }
 
@@ -33,7 +34,8 @@ func (f fakeLookup) Volume(name string) (index.Volume, bool) {
 	return v, ok
 }
 
-func (f fakeLookup) ReplicaNodes(volume string) []string { return f.replicas[volume] }
+func (f fakeLookup) ReplicaNodes(volume string) []string       { return f.replicas[volume] }
+func (f fakeLookup) ReplicaNodesOnDisk(volume string) []string { return f.onDisk[volume] }
 func (f fakeLookup) ShareManagerNode(volume string) string {
 	return f.shares[volume]
 }
@@ -259,8 +261,8 @@ func TestReviewSkipsPreScheduledPod(t *testing.T) {
 
 func shareManagerLookup() fakeLookup {
 	return fakeLookup{
-		synced:   true,
-		replicas: map[string][]string{"pvc-rwx": {"pi-cp2", "pi-cp3"}},
+		synced: true,
+		onDisk: map[string][]string{"pvc-rwx": {"pi-cp2", "pi-cp3"}},
 	}
 }
 
@@ -344,5 +346,59 @@ func TestReviewEchoesUID(t *testing.T) {
 	resp, _ := a.Review(review(t, podWithClaims("config"), "media"))
 	if resp.UID != "uid-1" {
 		t.Fatalf("UID must be echoed, got %q", resp.UID)
+	}
+}
+
+func TestShareManagerUsesReplicasThatAreNotRunning(t *testing.T) {
+	t.Parallel()
+	// Longhorn stops the engine and every replica before it recreates the share-manager,
+	// so a running-only view is empty at exactly the moment this admission happens. Both
+	// nodes still hold the data on disk.
+	a := newAdmitter(fakeLookup{
+		synced:   true,
+		replicas: map[string][]string{},
+		onDisk:   map[string][]string{"pvc-rwx": {"pi-cp1", "pi-cp2"}},
+	}, false)
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "share-manager-pvc-rwx"}}
+	resp, d := a.Review(review(t, pod, "longhorn-system"))
+	if d.Skipped != "" {
+		t.Fatalf("stopped replicas must not skip the share-manager, got %q", d.Skipped)
+	}
+	got := patchedHostnames(t, resp)
+	if len(got) != 2 || got[0] != "pi-cp1" || got[1] != "pi-cp2" {
+		t.Fatalf("want both replica nodes, got %v", got)
+	}
+}
+
+func TestShareManagerIgnoresFailedReplica(t *testing.T) {
+	t.Parallel()
+	// A replica Longhorn has marked failedAt is absent from the on-disk set, so the only
+	// target left is the healthy one.
+	a := newAdmitter(fakeLookup{
+		synced: true,
+		onDisk: map[string][]string{"pvc-rwx": {"pi-cp1"}},
+	}, false)
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "share-manager-pvc-rwx"}}
+	resp, _ := a.Review(review(t, pod, "longhorn-system"))
+	got := patchedHostnames(t, resp)
+	if len(got) != 1 || got[0] != "pi-cp1" {
+		t.Fatalf("want only the healthy replica node, got %v", got)
+	}
+}
+
+func TestOrdinaryPodKeepsTheRunningFilter(t *testing.T) {
+	t.Parallel()
+	// A consumer gains nothing from a node whose replica is not serving, and it never goes
+	// through the detach cycle that empties the running view.
+	l := rwoLookup()
+	l.replicas = map[string][]string{"pvc-1": {}}
+	l.onDisk = map[string][]string{"pvc-1": {"pi-cp1", "pi-cp3"}}
+	a := newAdmitter(l, false)
+	resp, d := a.Review(review(t, podWithClaims("config"), "media"))
+	if resp.Patch != nil {
+		t.Fatalf("no running replica means no preference, got %v", patchedHostnames(t, resp))
+	}
+	if d.Skipped != "no-local-replica" {
+		t.Fatalf("want no-local-replica, got %q", d.Skipped)
 	}
 }
