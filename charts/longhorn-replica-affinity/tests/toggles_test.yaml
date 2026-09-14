@@ -8,6 +8,7 @@ templates:
   - templates/podmonitor.yaml
   - templates/webhookconfiguration.yaml
   - templates/service.yaml
+  - templates/rbac.yaml
 tests:
   - it: reconciler off renders no reconciler deployment
     set:
@@ -67,3 +68,45 @@ tests:
           path: webhooks[0].clientConfig.service.name
           value: lra-custom-webhook
         template: templates/webhookconfiguration.yaml
+
+  - it: moveShareManager off drops the pod-delete grant
+    set:
+      reconciler.moveShareManager: false
+    template: templates/rbac.yaml
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["pods"]
+            verbs: ["delete"]
+          any: true
+
+  - it: moveShareManager binds the pod-delete grant in the Longhorn namespace, not the release one
+    set:
+      longhornNamespace: storage
+    template: templates/rbac.yaml
+    documentSelector:
+      path: roleRef.name
+      value: longhorn-replica-affinity-reconciler-sharemanager
+    asserts:
+      - isKind:
+          of: RoleBinding
+      - equal:
+          path: metadata.namespace
+          value: storage
+
+  - it: moveShareManager grants delete on pods and nothing else
+    template: templates/rbac.yaml
+    documentSelector:
+      path: rules[0].verbs[0]
+      value: delete
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: ["pods"]
+              verbs: ["delete"]

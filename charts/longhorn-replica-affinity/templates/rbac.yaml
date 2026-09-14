@@ -114,6 +114,37 @@ rules:
   - apiGroups: ["longhorn.io"]
     resources: ["volumes"]
     verbs: ["patch"] # spec.dataLocality and the restore annotation, nothing else
+{{- if .Values.reconciler.moveShareManager }}
+---
+{{- /*
+Deleting a stranded share-manager is the only way to move it: Longhorn recreates it and the sharemanager
+webhook entry places the new one on a node holding a replica. The verb cannot be narrowed by resourceNames
+(the pod name follows the volume, which is not known at install time), so the RoleBinding below scopes it to
+the Longhorn namespace and nothing else. The reconciler only ever deletes pods that its label-filtered
+informer returned, which is longhorn.io/component=share-manager.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "lra.reconcilerName" . }}-sharemanager
+  labels: {{- include "lra.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "lra.reconcilerName" . }}-sharemanager
+  namespace: {{ .Values.longhornNamespace }}
+  labels: {{- include "lra.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ include "lra.reconcilerName" . }}-sharemanager}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "lra.reconcilerName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

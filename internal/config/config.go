@@ -44,6 +44,7 @@ type Config struct {
 	MaxMoveBytes      int64
 	MaxBorrow         time.Duration
 	FlipDataLocality  bool
+	MoveShareManager  bool
 }
 
 // RestoreAnnotation is the key under which the reconciler parks a volume's original
@@ -120,6 +121,9 @@ func loadReconciler(c *Config) error {
 		return err
 	}
 	if c.FlipDataLocality, err = envBool("LRA_FLIP_DATA_LOCALITY", true); err != nil {
+		return err
+	}
+	if c.MoveShareManager, err = envBool("LRA_MOVE_SHARE_MANAGER", true); err != nil {
 		return err
 	}
 	return nil

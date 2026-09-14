@@ -59,6 +59,7 @@ spec:
             # int64 before quote: Helm parses a large YAML integer as float64, and quoting that directly
             # renders "5.36870912e+09", which ParseInt rejects at startup.
             - {name: LRA_MAX_MOVE_BYTES, value: {{ .Values.reconciler.maxMoveBytes | int64 | quote }}}
+            - {name: LRA_MOVE_SHARE_MANAGER, value: {{ .Values.reconciler.moveShareManager | quote }}}
             - {name: LRA_LOG_LEVEL, value: {{ .Values.logLevel | quote }}}
             # The reconciler never serves TLS, so it needs no certificate of its own.
             - {name: LRA_TLS_MODE, value: "provided"}

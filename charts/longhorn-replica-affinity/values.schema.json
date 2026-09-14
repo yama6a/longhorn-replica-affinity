@@ -84,6 +84,9 @@
                 "maxMoveBytes": {
                     "type": "integer"
                 },
+                "moveShareManager": {
+                    "type": "boolean"
+                },
                 "nodeSelector": {
                     "type": "object"
                 },

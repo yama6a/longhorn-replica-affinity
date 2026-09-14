@@ -25,13 +25,18 @@ var (
 
 	local = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "lra_volume_local",
-		Help: "1 when an attached volume has a running replica on its attached node (the share-manager's node for rwx), else 0.",
+		Help: "1 when an attached volume has a replica on its attached node (the share-manager's node for rwx), else 0. Running replicas only, except rwx, which counts replicas on disk.",
 	}, []string{"namespace", "pvc", "node", "access_mode"})
 
 	unfixable = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "lra_volume_unfixable",
 		Help: "1 when a volume is non-local and the reconciler will not move it.",
 	}, []string{"namespace", "pvc", "access_mode", "reason"})
+
+	shareManagerMoves = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "lra_share_manager_moves_total",
+		Help: "Share-manager pods deleted so Longhorn recreates them on a node holding a replica.",
+	}, []string{"namespace", "pvc"})
 
 	buildInfo = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "lra_build_info",
@@ -40,7 +45,7 @@ var (
 )
 
 func init() {
-	prometheus.MustRegister(admissions, flips, local, unfixable, buildInfo)
+	prometheus.MustRegister(admissions, flips, local, unfixable, shareManagerMoves, buildInfo)
 }
 
 // SetVersion stamps the build-info series.
@@ -75,6 +80,11 @@ func SetLocal(namespace, pvc, node, accessMode string, isLocal bool) {
 		v = 1
 	}
 	local.WithLabelValues(namespace, pvc, node, accessMode).Set(v)
+}
+
+// ShareManagerMove records one share-manager deleted to get it onto a replica node.
+func ShareManagerMove(namespace, pvc string) {
+	shareManagerMoves.WithLabelValues(namespace, pvc).Inc()
 }
 
 // SetUnfixable flags a volume the reconciler has decided it will not move.

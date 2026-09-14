@@ -114,16 +114,25 @@ func (i *Index) Synced() bool {
 // ReplicaNodes returns the nodes running a replica of volume, sorted. Only "running"
 // counts: a rebuilding or failed replica has nothing to read yet.
 func (i *Index) ReplicaNodes(volume string) []string {
+	return i.replicaNodes(volume, running)
+}
+
+// ReplicaNodesOnDisk returns the nodes that hold a replica of volume on disk, sorted,
+// whether or not the replica process is running. Longhorn stops the engine and every
+// replica before it recreates a share-manager, so a running-only view is empty at exactly
+// the moment the new share-manager is admitted.
+func (i *Index) ReplicaNodesOnDisk(volume string) []string {
+	return i.replicaNodes(volume, onDisk)
+}
+
+func (i *Index) replicaNodes(volume string, keep func(*unstructured.Unstructured) bool) []string {
 	seen := map[string]struct{}{}
 	for _, obj := range i.replicas.GetStore().List() {
 		u, ok := obj.(*unstructured.Unstructured)
 		if !ok {
 			continue
 		}
-		if nestedString(u, "spec", "volumeName") != volume {
-			continue
-		}
-		if nestedString(u, "status", "currentState") != "running" {
+		if nestedString(u, "spec", "volumeName") != volume || !keep(u) {
 			continue
 		}
 		if node := nestedString(u, "spec", "nodeID"); node != "" {
@@ -133,19 +142,37 @@ func (i *Index) ReplicaNodes(volume string) []string {
 	return sortedKeys(seen)
 }
 
+func running(u *unstructured.Unstructured) bool {
+	return nestedString(u, "status", "currentState") == "running"
+}
+
+func onDisk(u *unstructured.Unstructured) bool {
+	active, _, _ := unstructured.NestedBool(u.Object, "spec", "active")
+	return active &&
+		nestedString(u, "spec", "failedAt") == "" &&
+		u.GetDeletionTimestamp() == nil
+}
+
 // ShareManagerNode returns the node running the share-manager for an RWX volume, or "".
 // The consumer mounts nfs-ganesha, so this is the hop worth saving, not ReplicaNodes.
 func (i *Index) ShareManagerNode(volume string) string {
+	_, node, _ := i.ShareManagerPod(volume)
+	return node
+}
+
+// ShareManagerPod returns the name and node of the share-manager serving an RWX volume.
+// The pod informer is filtered by ShareManagerSelector, so anything it returns is one.
+func (i *Index) ShareManagerPod(volume string) (name, node string, ok bool) {
 	for _, obj := range i.pods.GetStore().List() {
-		p, ok := obj.(*corev1.Pod)
-		if !ok || p.Spec.NodeName == "" {
+		p, isPod := obj.(*corev1.Pod)
+		if !isPod || p.Spec.NodeName == "" {
 			continue
 		}
-		if p.Name == "share-manager-"+volume {
-			return p.Spec.NodeName
+		if p.Name == ShareManagerPrefix+volume {
+			return p.Name, p.Spec.NodeName, true
 		}
 	}
-	return ""
+	return "", "", false
 }
 
 // VolumeNameForClaim resolves a PVC to its Longhorn volume. Longhorn's CSI volumeHandle
