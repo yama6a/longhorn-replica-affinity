@@ -132,37 +132,12 @@ func (r *Reconciler) pass(ctx context.Context) {
 // The delete drops the NFS export, so every consumer's mount stalls until ganesha is back.
 // That is why it waits out the dwell and then holds off for MaxBorrow.
 func (r *Reconciler) considerShareManagerMove(ctx context.Context, v index.Volume) {
-	pod, node, ok := r.Index.ShareManagerPod(v.Name)
-	if !ok {
-		delete(r.since, v.Name) // mid-recreation; nothing to judge and nothing to delete
-		return
-	}
-
-	nodes := r.Index.ReplicaNodesOnDisk(v.Name)
-	if len(nodes) == 0 || slices.Contains(nodes, node) {
+	pod, node, nodes, stranded := r.strandedShareManager(v)
+	if !stranded {
 		delete(r.since, v.Name)
 		return
 	}
-
-	if !r.Cfg.MoveShareManager {
-		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "rwx-share-manager-moves")
-		return
-	}
-
-	first, started := r.since[v.Name]
-	if !started {
-		r.since[v.Name] = r.now()
-		return
-	}
-	if r.now().Sub(first) < r.Cfg.Dwell {
-		return
-	}
-
-	// One delete per MaxBorrow. A volume whose replica nodes the scheduler will not take
-	// would otherwise have its share-manager deleted on every pass, which is an outage
-	// loop rather than a fix.
-	if last, ever := r.moved[v.Name]; ever && r.now().Sub(last) < r.Cfg.MaxBorrow {
-		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "rwx-share-manager-moves")
+	if !r.moveDue(v) {
 		return
 	}
 
@@ -178,6 +153,47 @@ func (r *Reconciler) considerShareManagerMove(ctx context.Context, v index.Volum
 	r.Log.Info("deleting share-manager so Longhorn recreates it on a node holding a replica",
 		zap.String("volume", v.Name), zap.String("pvc", v.Namespace+"/"+v.PVCName),
 		zap.String("node", node), zap.Strings("replica_nodes", nodes))
+}
+
+// strandedShareManager reports whether the volume's share-manager runs on a node holding
+// none of its replicas, and returns the pod, that node and the replica nodes when it does.
+func (r *Reconciler) strandedShareManager(v index.Volume) (pod, node string, nodes []string, ok bool) {
+	pod, node, found := r.Index.ShareManagerPod(v.Name)
+	if !found {
+		return "", "", nil, false // mid-recreation: nothing to judge and nothing to delete
+	}
+	nodes = r.Index.ReplicaNodesOnDisk(v.Name)
+	if len(nodes) == 0 || slices.Contains(nodes, node) {
+		return "", "", nil, false
+	}
+	return pod, node, nodes, true
+}
+
+// moveDue reports whether the delete may go ahead now: the knob is on, the share-manager
+// has been stranded for a full dwell, and the last delete is outside the cooldown.
+func (r *Reconciler) moveDue(v index.Volume) bool {
+	if !r.Cfg.MoveShareManager {
+		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "rwx-share-manager-moves")
+		return false
+	}
+
+	first, started := r.since[v.Name]
+	if !started {
+		r.since[v.Name] = r.now()
+		return false
+	}
+	if r.now().Sub(first) < r.Cfg.Dwell {
+		return false
+	}
+
+	// One delete per MaxBorrow. A volume whose replica nodes the scheduler will not take
+	// would otherwise have its share-manager deleted on every pass, which is an outage
+	// loop rather than a fix.
+	if last, ever := r.moved[v.Name]; ever && r.now().Sub(last) < r.Cfg.MaxBorrow {
+		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "rwx-share-manager-moves")
+		return false
+	}
+	return true
 }
 
 func (r *Reconciler) considerBorrow(ctx context.Context, v index.Volume) {

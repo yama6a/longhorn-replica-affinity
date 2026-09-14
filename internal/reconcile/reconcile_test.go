@@ -480,8 +480,8 @@ func TestShareManagerNotMovedWhenReplicasAreStoppedButLocal(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // reads the default Prometheus registry, which every pass resets
 func TestShareManagerMovedAtMostOncePerMaxBorrow(t *testing.T) {
-	// Sequential: asserts a gauge on the default registry.
 	got := deletedPods(t, strandedStore(), func(r *Reconciler) {
 		r.since = map[string]time.Time{"pvc-rwx": time.Now().Add(-2 * time.Hour)}
 		r.moved = map[string]time.Time{"pvc-rwx": time.Now().Add(-5 * time.Minute)}
@@ -505,8 +505,8 @@ func TestShareManagerMovedAgainAfterMaxBorrow(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // reads the default Prometheus registry, which every pass resets
 func TestShareManagerNotMovedWhenKnobIsOff(t *testing.T) {
-	// Sequential: asserts a gauge on the default registry.
 	got := deletedPods(t, strandedStore(), func(r *Reconciler) {
 		r.Cfg.MoveShareManager = false
 		r.since = map[string]time.Time{"pvc-rwx": time.Now().Add(-2 * time.Hour)}
