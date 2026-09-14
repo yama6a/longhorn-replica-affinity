@@ -79,6 +79,14 @@ reconciler:
   maxBorrow: 1h
   # Actual (thin) size, not the provisioned ceiling.
   maxMoveBytes: 5368709120 # 5Gi
+  # An RWX volume is never copied, so the only way to fix a share-manager that landed on a node holding none
+  # of its replicas is to delete the pod: Longhorn recreates it and the sharemanager webhook entry places the
+  # new one on a replica node. Waits out dwell first, then at most one delete per maxBorrow.
+  #
+  # The delete drops the NFS export, so every consumer's mount stalls until nfs-ganesha is back, usually
+  # seconds. Set false to keep reporting lra_volume_unfixable{reason="rwx-share-manager-moves"} and fix it by
+  # hand. Needs delete on pods in longhornNamespace, which the chart grants only when this is true.
+  moveShareManager: true
   podAnnotations: {}
   nodeSelector: {}
   tolerations: []

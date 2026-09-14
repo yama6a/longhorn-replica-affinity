@@ -30,6 +30,8 @@ const bestEffort = "best-effort"
 type Store interface {
 	AttachedVolumes() []index.Volume
 	ReplicaNodes(volume string) []string
+	ReplicaNodesOnDisk(volume string) []string
+	ShareManagerPod(volume string) (name, node string, ok bool)
 }
 
 // Reconciler borrows a volume's dataLocality long enough to pull one replica local, then
@@ -43,6 +45,7 @@ type Reconciler struct {
 
 	since    map[string]time.Time
 	borrowed map[string]time.Time // when each in-flight borrow started, for the backstop
+	moved    map[string]time.Time // when each share-manager was last deleted, for the cooldown
 	now      func() time.Time     // swapped in tests to step over the dwell window
 }
 
@@ -68,6 +71,9 @@ func (r *Reconciler) init() {
 	if r.borrowed == nil {
 		r.borrowed = map[string]time.Time{}
 	}
+	if r.moved == nil {
+		r.moved = map[string]time.Time{}
+	}
 	if r.now == nil {
 		r.now = time.Now
 	}
@@ -80,13 +86,25 @@ func (r *Reconciler) pass(ctx context.Context) {
 
 	for _, v := range r.Index.AttachedVolumes() {
 		seen[v.Name] = struct{}{}
+
+		nodes := r.Index.ReplicaNodes(v.Name)
+		if v.RWX() {
+			// Longhorn stops every replica while it recreates a share-manager, so the
+			// running-only view would drop this gauge to 0 for those seconds.
+			nodes = r.Index.ReplicaNodesOnDisk(v.Name)
+		}
 		// For rwx the attached node is the share-manager's, so this measures the hop from
 		// the share-manager to its replicas, which every consumer of the volume pays.
-		isLocal := slices.Contains(r.Index.ReplicaNodes(v.Name), v.AttachedNode)
+		isLocal := slices.Contains(nodes, v.AttachedNode)
 		metrics.SetLocal(v.Namespace, v.PVCName, v.AttachedNode, v.AccessMode, isLocal)
 
+		if v.RWX() {
+			r.considerShareManagerMove(ctx, v)
+			continue
+		}
+
 		if v.Restore != "" {
-			r.considerRestore(ctx, v, isLocal, len(r.Index.ReplicaNodes(v.Name)))
+			r.considerRestore(ctx, v, isLocal, len(nodes))
 			delete(r.since, v.Name)
 			continue
 		}
@@ -97,11 +115,69 @@ func (r *Reconciler) pass(ctx context.Context) {
 		r.considerBorrow(ctx, v)
 	}
 
-	for name := range r.since {
-		if _, ok := seen[name]; !ok {
-			delete(r.since, name)
+	for _, m := range []map[string]time.Time{r.since, r.moved} {
+		for name := range m {
+			if _, ok := seen[name]; !ok {
+				delete(m, name)
+			}
 		}
 	}
+}
+
+// considerShareManagerMove deletes a share-manager that has sat on a node holding none of
+// its volume's replicas for longer than the dwell. Longhorn recreates it and the
+// sharemanager webhook entry puts the new one on a replica node, which collapses the
+// share-manager-to-replica hop for every consumer at once. The volume itself never moves.
+//
+// The delete drops the NFS export, so every consumer's mount stalls until ganesha is back.
+// That is why it waits out the dwell and then holds off for MaxBorrow.
+func (r *Reconciler) considerShareManagerMove(ctx context.Context, v index.Volume) {
+	pod, node, ok := r.Index.ShareManagerPod(v.Name)
+	if !ok {
+		delete(r.since, v.Name) // mid-recreation; nothing to judge and nothing to delete
+		return
+	}
+
+	nodes := r.Index.ReplicaNodesOnDisk(v.Name)
+	if len(nodes) == 0 || slices.Contains(nodes, node) {
+		delete(r.since, v.Name)
+		return
+	}
+
+	if !r.Cfg.MoveShareManager {
+		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "rwx-share-manager-moves")
+		return
+	}
+
+	first, started := r.since[v.Name]
+	if !started {
+		r.since[v.Name] = r.now()
+		return
+	}
+	if r.now().Sub(first) < r.Cfg.Dwell {
+		return
+	}
+
+	// One delete per MaxBorrow. A volume whose replica nodes the scheduler will not take
+	// would otherwise have its share-manager deleted on every pass, which is an outage
+	// loop rather than a fix.
+	if last, ever := r.moved[v.Name]; ever && r.now().Sub(last) < r.Cfg.MaxBorrow {
+		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "rwx-share-manager-moves")
+		return
+	}
+
+	err := r.Kube.CoreV1().Pods(r.Cfg.LonghornNamespace).Delete(ctx, pod, metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		r.Log.Error("delete share-manager",
+			zap.String("volume", v.Name), zap.String("pod", pod), zap.Error(err))
+		return
+	}
+	r.moved[v.Name] = r.now()
+	delete(r.since, v.Name)
+	metrics.ShareManagerMove(v.Namespace, v.PVCName)
+	r.Log.Info("deleting share-manager so Longhorn recreates it on a node holding a replica",
+		zap.String("volume", v.Name), zap.String("pvc", v.Namespace+"/"+v.PVCName),
+		zap.String("node", node), zap.Strings("replica_nodes", nodes))
 }
 
 func (r *Reconciler) considerBorrow(ctx context.Context, v index.Volume) {
@@ -137,12 +213,9 @@ func (r *Reconciler) borrowable(ctx context.Context, v index.Volume) bool {
 		return false // already borrowed; Longhorn is mid-rebuild
 	}
 
-	// Never move an rwx volume. Its attached node is the share-manager's, and a
-	// share-manager is a pod, so the webhook moves IT onto a replica instead. Copying a
-	// shared volume around would be the exact thing this project exists to avoid.
-	// (strict-local is documented as incompatible with rwx anyway.)
+	// Never move an rwx volume. pass routes those to considerShareManagerMove, and copying
+	// a shared volume around would be the exact thing this project exists to avoid.
 	if v.RWX() {
-		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "rwx-share-manager-moves")
 		return false
 	}
 

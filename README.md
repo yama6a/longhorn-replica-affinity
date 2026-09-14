@@ -21,9 +21,16 @@ unmerged) and [longhorn#12591](https://github.com/longhorn/longhorn/issues/12591
 
 ## `webhook`
 
-Mutating admission on pod `CREATE`. Per PVC, finds the nodes with a running replica and
-appends a `preferredDuringSchedulingIgnoredDuringExecution` term for each, weighted by how
-many of the pod's volumes that node holds.
+Mutating admission on pod `CREATE`. Per PVC, finds the nodes holding a replica and appends
+a `preferredDuringSchedulingIgnoredDuringExecution` term for each, weighted by how many of
+the pod's volumes that node holds.
+
+Which replicas count depends on what is being placed:
+
+| Pod | Replicas counted | Why |
+|---|---|---|
+| ordinary consumer | `status.currentState == running` | a node whose replica is not serving reads has nothing to offer, and the pod never goes through a detach |
+| share-manager | `spec.active`, `spec.nodeID` set, no `spec.failedAt`, not deleting | Longhorn stops the engine and every replica before recreating the share-manager, so at admission time none are running. Where the bytes sit on disk does not change while the process is down |
 
 - Soft. A node with no replica can still take the pod.
 - `requiredDuringScheduling` and existing preferred terms are left alone.
@@ -50,15 +57,36 @@ Both are pod moves. The volume never moves, which matters most here: an RWX volu
 usually the largest thing in the cluster and is shared, so copying it to chase whichever
 node the share-manager landed on is the worst possible trade.
 
-The reconciler therefore refuses to touch RWX volumes at all and reports
-`lra_volume_unfixable{reason="rwx-share-manager-moves"}` instead. Longhorn also documents
-`strict-local` as incompatible with RWX, so there is no supported way to pin one anyway.
+The reconciler never copies an RWX volume. Longhorn also documents `strict-local` as
+incompatible with RWX, so there is no supported way to pin one anyway.
 
 Hop 2 needs a webhook entry scoped to Longhorn's own namespace, which is why it is a
 separate entry rather than a hole in the namespace exclusion: the `objectSelector` means
 the API server never calls this for any other Longhorn pod, so the storage layer's own
 bootstrap is untouched, and `failurePolicy: Ignore` still applies. Turn it off with
 `shareManager.enabled=false`.
+
+### Moving a share-manager that already landed wrong
+
+The webhook only gets a say when the pod is created. A share-manager already running on a
+node with no replica stays there until something else recreates it, which can be a day or
+more.
+
+So the reconciler deletes it. Longhorn recreates the pod, the webhook entry above places
+the new one on a replica node, and hop 2 is gone for every consumer at once. The volume
+still never moves.
+
+Guards, because the delete drops the NFS export and every consumer's mount stalls until
+nfs-ganesha is back:
+
+- The share-manager's node must hold none of the volume's replicas for a full `LRA_DWELL`
+  (30m) first.
+- At most one delete per volume per `LRA_MAX_BORROW` (1h). A volume whose replica nodes
+  the scheduler will not take would otherwise be deleted on every tick.
+- Inside that hour, still off its data, it reports
+  `lra_volume_unfixable{reason="rwx-share-manager-moves"}` and waits.
+- `LRA_MOVE_SHARE_MANAGER=false` turns the delete off and leaves only the report. The
+  chart then also drops the `delete` on pods from the reconciler's RBAC.
 
 ## `reconcile`
 
@@ -217,6 +245,7 @@ recreated.
 | `LRA_MAX_BORROW` | `1h` | give up waiting for Longhorn to trim the surplus replica and restore anyway |
 | `LRA_MAX_MOVE_BYTES` | `5368709120` | never move a volume larger than this (actual, not provisioned) |
 | `LRA_FLIP_DATA_LOCALITY` | `true` | false makes `reconcile` observe-only |
+| `LRA_MOVE_SHARE_MANAGER` | `true` | delete a share-manager that has sat off its data for `LRA_DWELL`, so Longhorn recreates it on a replica node. Costs a short NFS stall |
 | `LRA_LOG_LEVEL` | `info` | `debug` logs every skipped admission |
 
 ## Metrics
@@ -225,10 +254,11 @@ recreated.
 
 | Series | Meaning |
 |---|---|
-| `lra_volume_local{namespace,pvc,node}` | 1 when an attached volume has a running replica on its own node |
+| `lra_volume_local{namespace,pvc,node,access_mode}` | 1 when an attached volume has a replica on its own node. Running replicas, except RWX, which counts replicas on disk so it does not read 0 while Longhorn restarts them |
 | `lra_admissions_total{outcome}` | `injected`, `no-local-replica`, `pre-scheduled`, `cache-cold`, `decode` |
 | `lra_data_locality_flips_total{direction}` | `borrow` / `restore` |
 | `lra_volume_unfixable{namespace,pvc,access_mode,reason}` | not moving this one: `too-large`, `longhorn-managed`, `rwx-share-manager-moves` |
+| `lra_share_manager_moves_total{namespace,pvc}` | share-managers deleted to get them onto a replica node |
 | `lra_build_info{version}` | always 1 |
 
 ## Releases

@@ -16,6 +16,9 @@ func TestLoadDefaults(t *testing.T) {
 	if !c.FlipDataLocality {
 		t.Error("FlipDataLocality should default on")
 	}
+	if !c.MoveShareManager {
+		t.Error("MoveShareManager should default on")
+	}
 	if c.MaxMoveBytes != 5<<30 {
 		t.Errorf("MaxMoveBytes = %d, want 5Gi", c.MaxMoveBytes)
 	}
