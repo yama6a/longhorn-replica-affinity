@@ -16,7 +16,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build,id=go-build-$TARGETARCH \
     go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" \
     -o longhorn-replica-affinity ./cmd/longhorn-replica-affinity
 
-FROM gcr.io/distroless/static:nonroot@sha256:1c2c046bc09ed40fad370b599a0b1ae7987f55b01e247cf27a7c27cd97e5bbc7
+FROM gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
 COPY --from=build /app/longhorn-replica-affinity /longhorn-replica-affinity
 USER 65532:65532
 EXPOSE 8443 9100
