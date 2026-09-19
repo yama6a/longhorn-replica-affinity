@@ -24,13 +24,14 @@
       groupName: "kubernetes libraries",
     },
     {
-      // apimachinery compiles kube-openapi's schema types into its own structs, so both must agree on
-      // the structured-merge-diff major. kube-openapi has moved to v7 while apimachinery v0.37 is still
-      // on v6, and a newer kube-openapi drags v7 in via go mod tidy. Lift the ceiling to the pseudo-
-      // version matching the next k8s.io release that uses v7.
-      description: "hold kube-openapi at the revision apimachinery pins",
+      // apimachinery compiles kube-openapi's schema types into its own structs, so both must agree on the
+      // structured-merge-diff major. kube-openapi is on v7, apimachinery v0.37 is on v6, and a bump drags
+      // v7 in via go mod tidy, which then does not compile. allowedVersions cannot hold it: Renovate ships
+      // a pseudo-version bump as a `digest` update and that check only filters version updates.
+      // Its floor comes from apimachinery's own go.mod, so gomodTidy carries it on the next k8s.io bump.
+      description: "kube-openapi follows apimachinery, never Renovate",
       matchPackageNames: ["k8s.io/kube-openapi"],
-      allowedVersions: "<=v0.0.0-20260721132016-d427ff9ee9ad",
+      enabled: false,
     },
   ],
 }
