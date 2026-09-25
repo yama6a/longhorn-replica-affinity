@@ -7,9 +7,9 @@ require (
 	github.com/prometheus/client_model v0.6.3
 	go.uber.org/zap v1.28.0
 	golang.org/x/sync v0.23.0
-	k8s.io/api v0.37.0
-	k8s.io/apimachinery v0.37.0
-	k8s.io/client-go v0.37.0
+	k8s.io/api v0.37.1
+	k8s.io/apimachinery v0.37.1
+	k8s.io/client-go v0.37.1
 )
 
 require (
