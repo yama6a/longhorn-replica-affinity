@@ -28,10 +28,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Every PR merged since the last release, not just the one that triggered this run.
-      # A concurrency group queues only ONE pending run, so a burst of merges silently
-      # cancels the runs in between; deriving the bump from the whole backlog means the
-      # next run absorbs whatever was dropped instead of losing those releases.
+      # Reads every PR merged since the last release. The concurrency group cancels queued runs in a
+      # burst of merges, so the next run absorbs their releases.
       - name: Resolve bump since the last release
         id: bump
         env:
@@ -117,12 +115,8 @@ jobs:
           helm push "/tmp/chart/longhorn-replica-affinity-${VERSION#v}.tgz" \
             "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts"
 
-      # Tag only after both pushes, so a tag always has an image and a chart.
-      #
-      # Retried because this endpoint has returned a one-off 403 "Resource not accessible
-      # by integration" on a run whose token demonstrably had Contents: write, between two
-      # identical runs that succeeded. Cause unknown, assumed transient. Without the retry
-      # the release is only recovered on the NEXT merge, by the backlog logic above.
+      # Tag only after both pushes, so a tag always has an image and a chart. Retried, because this
+      # endpoint sometimes returns 403 "Resource not accessible by integration" with a valid token.
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

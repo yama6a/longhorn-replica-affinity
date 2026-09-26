@@ -3,62 +3,35 @@ fullnameOverride: ""
 
 image:
   repository: ghcr.io/yama6a/longhorn-replica-affinity
-  # Defaults to the chart's appVersion, which the release pipeline pins to the matching image.
-  tag: ""
+  tag: ""                    # OPTIONAL: (string) empty uses the chart's appVersion, which the release pins to the matching image
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
-# The pod label that opts a workload in. Nothing is mutated without it: the webhook's objectSelector gates on
-# it, so the apiserver never even calls this for anything else.
-labelKey: longhorn-replica-affinity/enabled
-labelValue: "true"
-
-# Weight added per volume a node holds, multiplied by that count and capped at 100. Keep it below any
-# hand-written preference on your pods that should still outrank data locality.
-weight: 30
-
-# RWX volumes are served by a single share-manager pod, so the consumer mounts nfs-ganesha rather than a
-# replica and the share-manager's node is the only placement that saves it a hop. Set true to ignore RWX.
-skipRWX: false
+labelKey: longhorn-replica-affinity/enabled # OPTIONAL: (string) pod label that opts a workload in. The webhook's objectSelector gates on it
+labelValue: "true"                          # OPTIONAL: (string) value of that label
+weight: 30                                  # OPTIONAL: (int) 1-100, per volume a node holds, capped at 100. Keep below hand-written preferences that should win
+skipRWX: false                              # OPTIONAL: (bool) true ignores RWX volumes instead of preferring the share-manager's node
 
 shareManager:
-  # Also place Longhorn's own share-manager pod onto a node holding a replica of the volume it serves. That
-  # removes the second RWX hop (share-manager to replica) for every consumer at once, by moving one pod
-  # rather than copying the volume.
-  #
-  # Adds a webhook entry scoped to longhorn-system AND the share-manager label, so the apiserver never calls
-  # this for any other Longhorn pod. failurePolicy still applies, so a broken webhook cannot wedge storage.
-  enabled: true
+  enabled: true # OPTIONAL: (bool) also place Longhorn's share-manager pods on a replica node. Adds a webhook entry scoped to them
 
 longhornNamespace: longhorn-system
-logLevel: info
+logLevel: info    # OPTIONAL: (string) a zap level, e.g. debug, which logs every skipped admission
 metricsPort: 9100
 
 tls:
-  # self-signed: the webhook mints its own CA and leaf, parks them in a Secret so all replicas agree, and
-  #              publishes the CA into this chart's MutatingWebhookConfiguration. No dependencies.
-  # provided:    the keypair is mounted from an existing Secret and something else owns the caBundle.
-  #              Use this when policy forbids giving a workload patch on a MutatingWebhookConfiguration.
-  mode: self-signed
-  # provided mode only: the Secret to mount, and whether to annotate for cert-manager's ca-injector.
-  secretName: ""
+  mode: self-signed # OPTIONAL: (string) self-signed or provided. See TLS in the README
+  secretName: ""    # OPTIONAL: (string) provided mode: the Secret with tls.crt and tls.key. Empty uses <fullname>-tls
   certManager:
-    # Renders a self-signed Issuer + Certificate and the inject-ca-from annotation. Requires cert-manager.
-    enabled: false
-    # Leave empty to use the rendered self-signed Issuer; set to use your own.
-    issuerRef: {}
-    #  name: my-issuer
-    #  kind: ClusterIssuer
+    enabled: false  # OPTIONAL: (bool) provided mode only. Renders an Issuer, a Certificate and the ca-injector annotation. Needs cert-manager
+    issuerRef: {}   # OPTIONAL: (object) your own issuer, e.g. {name: my-issuer, kind: ClusterIssuer}. Empty uses the rendered self-signed one
 
 webhook:
   replicas: 2
   port: 8443
   timeoutSeconds: 5
-  # failurePolicy Ignore is the whole safety story: this optimises placement, so if it is down or slow, pods
-  # must schedule exactly as they would without it. Fail is almost never what you want here.
-  failurePolicy: Ignore
-  # Never mutate what has to come up before this does. The release namespace is added automatically.
-  excludedNamespaces: [kube-system, longhorn-system]
+  failurePolicy: Ignore # OPTIONAL: (string) Ignore or Fail. Keep Ignore, so a down webhook never blocks scheduling
+  excludedNamespaces: [kube-system, longhorn-system] # OPTIONAL: (list) never mutated. The release namespace is added automatically
   podAntiAffinity: true
   annotations: {}
   podAnnotations: {}
@@ -66,27 +39,12 @@ webhook:
   tolerations: []
 
 reconciler:
-  # Moves the DATA for a pod pinned by a hard constraint that can never move to its data: it borrows the
-  # volume's dataLocality to pull a replica local, then restores the original value. A one-time copy, not
-  # permanent volume-follows-pod.
-  enabled: true
+  enabled: true           # OPTIONAL: (bool) moves data for pods a hard constraint keeps off it. See reconcile in the README
   intervalSeconds: 60
-  # Long enough that a rolling update or a node drain never triggers a copy.
-  dwell: 30m
-  # How long to hold the borrow while waiting for Longhorn to finish: it adds the local replica, rebuilds it,
-  # and only then drops a remote one. Restoring in that gap leaves the volume permanently over-replicated.
-  # After this, restore anyway: holding best-effort is worse than one surplus replica.
-  maxBorrow: 1h
-  # Actual (thin) size, not the provisioned ceiling.
-  maxMoveBytes: 5368709120 # 5Gi
-  # An RWX volume is never copied, so the only way to fix a share-manager that landed on a node holding none
-  # of its replicas is to delete the pod: Longhorn recreates it and the sharemanager webhook entry places the
-  # new one on a replica node. Waits out dwell first, then at most one delete per maxBorrow.
-  #
-  # The delete drops the NFS export, so every consumer's mount stalls until nfs-ganesha is back, usually
-  # seconds. Set false to keep reporting lra_volume_unfixable{reason="rwx-share-manager-moves"} and fix it by
-  # hand. Needs delete on pods in longhornNamespace, which the chart grants only when this is true.
-  moveShareManager: true
+  dwell: 30m              # OPTIONAL: (duration) time off its data before anything moves. Longer than a rolling update or a drain
+  maxBorrow: 1h           # OPTIONAL: (duration) restore dataLocality after this even if Longhorn has not dropped the surplus replica
+  maxMoveBytes: 5368709120 # OPTIONAL: (int) bytes, actual size not provisioned. Larger volumes never move. 5368709120 is 5Gi
+  moveShareManager: true  # OPTIONAL: (bool) delete a stranded share-manager so it lands on a replica node. Stalls NFS mounts for seconds. false only reports it
   podAnnotations: {}
   nodeSelector: {}
   tolerations: []
@@ -97,8 +55,7 @@ serviceAccount:
 priorityClassName: ""
 
 podMonitor:
-  # Requires the Prometheus operator CRDs.
-  enabled: false
+  enabled: false # OPTIONAL: (bool) needs the Prometheus operator CRDs
   interval: 60s
   labels: {}
 

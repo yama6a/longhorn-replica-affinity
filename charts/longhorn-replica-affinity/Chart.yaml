@@ -6,7 +6,6 @@ home: https://github.com/yama6a/longhorn-replica-affinity
 sources:
   - https://github.com/yama6a/longhorn-replica-affinity
 keywords: [longhorn, storage, scheduling, data-locality, admission-webhook]
-# version and appVersion are both overwritten at package time with the release tag, so the chart and the image
-# it defaults to can never drift apart. The values here only matter for a local `helm template`.
+# The release overwrites both with its tag. These only matter for a local helm template.
 version: 0.0.0
 appVersion: "0.0.0"

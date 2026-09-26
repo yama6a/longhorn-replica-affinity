@@ -275,8 +275,6 @@ func namedReview(t *testing.T, pod *corev1.Pod, ns, name string) *admissionv1.Ad
 
 func TestShareManagerMovesToItsReplicas(t *testing.T) {
 	t.Parallel()
-	// The share-manager is a pod, so the rwx hop from it to its replicas is fixed by
-	// moving IT, never by copying the volume to wherever it happens to be.
 	a := newAdmitter(shareManagerLookup(), false)
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "share-manager-pvc-rwx"}}
 	resp, d := a.Review(review(t, pod, "longhorn-system"))
@@ -291,7 +289,7 @@ func TestShareManagerMovesToItsReplicas(t *testing.T) {
 
 func TestShareManagerNeedsNoPVCInItsSpec(t *testing.T) {
 	t.Parallel()
-	// Longhorn does not give the share-manager a PVC; the volume comes from its name.
+	// Longhorn gives the share-manager no PVC, so the volume comes from its name.
 	a := newAdmitter(shareManagerLookup(), false)
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "share-manager-pvc-rwx"}}
 	if len(pod.Spec.Volumes) != 0 {
@@ -351,9 +349,7 @@ func TestReviewEchoesUID(t *testing.T) {
 
 func TestShareManagerUsesReplicasThatAreNotRunning(t *testing.T) {
 	t.Parallel()
-	// Longhorn stops the engine and every replica before it recreates the share-manager,
-	// so a running-only view is empty at exactly the moment this admission happens. Both
-	// nodes still hold the data on disk.
+	// No replica is running during a share-manager recreate, but both nodes hold the data.
 	a := newAdmitter(fakeLookup{
 		synced:   true,
 		replicas: map[string][]string{},

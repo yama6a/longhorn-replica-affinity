@@ -70,11 +70,8 @@ func (c Config) dnsNames() []string {
 	}
 }
 
-// Ensure returns a usable bundle, generating and storing one if the Secret is missing or
-// close to expiry, and publishes its CA to the webhook configuration.
-//
-// Safe to run from every replica at once: creation races resolve by re-reading the
-// winner's Secret, and rotation uses the API server's own optimistic concurrency.
+// Ensure returns a usable bundle, generating one when the Secret is missing or near expiry, and
+// publishes its CA. Every replica may run it at once: a create race re-reads the winner's Secret.
 func Ensure(ctx context.Context, kc kubernetes.Interface, cfg Config) (Bundle, error) {
 	if err := cfg.validate(); err != nil {
 		return Bundle{}, err
@@ -109,8 +106,6 @@ func load(ctx context.Context, kc kubernetes.Interface, cfg Config) (Bundle, boo
 	return Bundle{CACert: sec.Data[caCertKey], TLSCert: sec.Data[tlsCertKey], TLSKey: sec.Data[tlsKeyKey]}, true, nil
 }
 
-// usable reports whether a stored bundle is complete, parses, still covers every name the
-// apiserver dials, and is not near expiry.
 func usable(b Bundle, cfg Config) bool {
 	if len(b.CACert) == 0 || len(b.TLSCert) == 0 || len(b.TLSKey) == 0 {
 		return false
@@ -127,7 +122,7 @@ func usable(b Bundle, cfg Config) bool {
 		return false
 	}
 	for _, want := range cfg.dnsNames() {
-		// A renamed Service leaves the stored leaf covering the old name; regenerate for the new one.
+		// A renamed Service leaves the stored leaf covering the old name, so regenerate.
 		if err := leaf.VerifyHostname(want); err != nil {
 			return false
 		}

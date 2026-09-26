@@ -120,8 +120,7 @@ func replica(name, node, state string, spec map[string]any) *unstructured.Unstru
 
 func TestReplicaNodesOnDiskIgnoresStoppedProcesses(t *testing.T) {
 	t.Parallel()
-	// Longhorn tears the engine and every replica down before it recreates a
-	// share-manager, so at that moment nothing is running but the data has not moved.
+	// No replica is running during a share-manager recreate, but the data has not moved.
 	i := replicaStore(t,
 		replica("r-92e5efaf", "pi-cp2", "stopped", nil),
 		replica("r-c0226189", "pi-cp1", "stopped", nil),

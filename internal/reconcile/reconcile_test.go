@@ -251,7 +251,7 @@ func TestDwellResetsWhenVolumeBecomesLocal(t *testing.T) {
 
 func TestNeverMovesAnRWXVolume(t *testing.T) {
 	t.Parallel()
-	// The share-manager moves to the data; the data never moves to the share-manager.
+	// The share-manager moves to the data, never the reverse.
 	rwx := index.Volume{
 		Name: "pvc-rwx", AttachedNode: "tc-w1", DataLocality: "disabled", AccessMode: "rwx",
 		ActualSize: 1 << 20, Namespace: "media", PVCName: "media-downloads",
@@ -274,8 +274,7 @@ func borrowed() index.Volume {
 
 func TestDoesNotRestoreWhileOverReplicated(t *testing.T) {
 	t.Parallel()
-	// Longhorn adds the local replica, rebuilds, and only THEN drops a remote one.
-	// Restoring in that gap leaves the volume permanently at 3 of 2.
+	// Restoring before Longhorn drops the remote replica leaves the volume at 3 of 2 for good.
 	patches := run(t, store(borrowed(), "tc-w1", "pi-cp1", "pi-cp3"), []*corev1.Pod{labelledPod("plex-1")}, nil)
 	if len(patches) != 0 {
 		t.Fatalf("must wait for Longhorn to trim the surplus, got %v", patches)
@@ -301,8 +300,6 @@ func TestDoesNotRestoreWhileStillRemote(t *testing.T) {
 
 func TestBackstopRestoresAfterMaxBorrow(t *testing.T) {
 	t.Parallel()
-	// Holding best-effort forever would drag a copy on every future reschedule, which is
-	// worse than one surplus replica.
 	patches := run(t, store(borrowed(), "tc-w1", "pi-cp1", "pi-cp3"), []*corev1.Pod{labelledPod("plex-1")},
 		func(r *Reconciler) {
 			r.borrowed = map[string]time.Time{"pvc-1": time.Now().Add(-2 * time.Hour)}
@@ -444,9 +441,7 @@ func labelValue(m *dto.Metric, name string) string {
 
 func TestShareManagerMovedOnceStranded(t *testing.T) {
 	t.Parallel()
-	// The share-manager is on a node holding none of the volume's replicas, and has been
-	// for longer than the dwell. Deleting it makes Longhorn recreate it, and the
-	// sharemanager webhook entry then places it on a replica node.
+	// Stranded off its replicas for longer than the dwell, so it gets deleted.
 	got := deletedPods(t, strandedStore(), stale())
 	if len(got) != 1 || got[0] != "share-manager-pvc-rwx" {
 		t.Fatalf("want the share-manager deleted once, got %v", got)
@@ -471,7 +466,7 @@ func TestShareManagerNotMovedWhenAlreadyOnAReplicaNode(t *testing.T) {
 
 func TestShareManagerNotMovedWhenReplicasAreStoppedButLocal(t *testing.T) {
 	t.Parallel()
-	// The running view is empty during the detach cycle; the on-disk view is what decides.
+	// The running view is empty during the detach cycle, so the on-disk view decides.
 	s := strandedStore()
 	s.shares["pvc-rwx"] = "pi-cp1"
 	s.replicas = map[string][]string{"pvc-rwx": {}}

@@ -30,9 +30,8 @@ type Config struct {
 	CertFile    string
 	KeyFile     string
 
-	// TLSMode selects where the serving certificate comes from: "self-signed" generates
-	// and rotates one into TLSSecret and publishes its CA to WebhookName, "provided"
-	// reads CertFile/KeyFile and leaves the caBundle to whatever manages them.
+	// TLSMode "self-signed" generates the keypair into TLSSecret and publishes its CA to WebhookName.
+	// "provided" reads CertFile and KeyFile and leaves the caBundle to whatever manages them.
 	TLSMode     string
 	TLSSecret   string
 	ServiceName string
@@ -75,8 +74,8 @@ func Load() (Config, error) {
 		Namespace:         env("LRA_NAMESPACE", ""),
 	}
 
-	// Namespace is deliberately NOT required here: only the webhook in self-signed mode
-	// needs it, and the reconciler shares this config and never serves TLS.
+	// Namespace is not required here. Only the self-signed webhook needs it, and the reconciler
+	// shares this config.
 	if c.TLSMode != TLSModeSelfSigned && c.TLSMode != TLSModeProvided {
 		return c, fmt.Errorf("LRA_TLS_MODE must be %q or %q, got %q", TLSModeSelfSigned, TLSModeProvided, c.TLSMode)
 	}
