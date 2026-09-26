@@ -78,8 +78,7 @@ spec:
             - {name: webhook, containerPort: {{ .Values.webhook.port }}}
             - {name: metrics, containerPort: {{ .Values.metricsPort }}}
           readinessProbe:
-            # 503 until the informer caches are warm, so a pod never serves admission while it would answer
-            # "no local replica" for everything.
+            # 503 until the informer caches are warm, or every admission would answer "no local replica"
             httpGet: {path: /healthz, port: webhook, scheme: HTTPS}
             periodSeconds: 5
           securityContext:

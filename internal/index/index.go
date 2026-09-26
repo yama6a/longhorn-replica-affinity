@@ -117,10 +117,8 @@ func (i *Index) ReplicaNodes(volume string) []string {
 	return i.replicaNodes(volume, running)
 }
 
-// ReplicaNodesOnDisk returns the nodes that hold a replica of volume on disk, sorted,
-// whether or not the replica process is running. Longhorn stops the engine and every
-// replica before it recreates a share-manager, so a running-only view is empty at exactly
-// the moment the new share-manager is admitted.
+// ReplicaNodesOnDisk returns the nodes that hold a replica of volume on disk, sorted, running or not.
+// Longhorn stops every replica before it recreates a share-manager, so the running view is empty then.
 func (i *Index) ReplicaNodesOnDisk(volume string) []string {
 	return i.replicaNodes(volume, onDisk)
 }

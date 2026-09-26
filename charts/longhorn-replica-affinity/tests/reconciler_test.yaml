@@ -5,9 +5,7 @@ release:
 templates:
   - templates/deployment-reconciler.yaml
 tests:
-  # Helm parses a large YAML integer as a float64, so `| quote` alone renders
-  # "5.36870912e+09" and the binary rejects it at startup. It is valid YAML and passes
-  # kubeconform, so only the value itself catches it.
+  # quote alone renders 5.36870912e+09, which passes kubeconform, so only this check catches it
   - it: renders the default maxMoveBytes as a plain integer string
     asserts:
       - contains:

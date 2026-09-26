@@ -124,13 +124,8 @@ func (r *Reconciler) pass(ctx context.Context) {
 	}
 }
 
-// considerShareManagerMove deletes a share-manager that has sat on a node holding none of
-// its volume's replicas for longer than the dwell. Longhorn recreates it and the
-// sharemanager webhook entry puts the new one on a replica node, which collapses the
-// share-manager-to-replica hop for every consumer at once. The volume itself never moves.
-//
-// The delete drops the NFS export, so every consumer's mount stalls until ganesha is back.
-// That is why it waits out the dwell and then holds off for MaxBorrow.
+// considerShareManagerMove deletes a share-manager stranded off its replicas, so the webhook places
+// the new one on a replica node. The delete stalls every NFS mount, hence the dwell and the cooldown.
 func (r *Reconciler) considerShareManagerMove(ctx context.Context, v index.Volume) {
 	pod, node, nodes, stranded := r.strandedShareManager(v)
 	if !stranded {
@@ -155,8 +150,6 @@ func (r *Reconciler) considerShareManagerMove(ctx context.Context, v index.Volum
 		zap.String("node", node), zap.Strings("replica_nodes", nodes))
 }
 
-// strandedShareManager reports whether the volume's share-manager runs on a node holding
-// none of its replicas, and returns the pod, that node and the replica nodes when it does.
 func (r *Reconciler) strandedShareManager(v index.Volume) (pod, node string, nodes []string, ok bool) {
 	pod, node, found := r.Index.ShareManagerPod(v.Name)
 	if !found {
@@ -169,8 +162,6 @@ func (r *Reconciler) strandedShareManager(v index.Volume) (pod, node string, nod
 	return pod, node, nodes, true
 }
 
-// moveDue reports whether the delete may go ahead now: the knob is on, the share-manager
-// has been stranded for a full dwell, and the last delete is outside the cooldown.
 func (r *Reconciler) moveDue(v index.Volume) bool {
 	if !r.Cfg.MoveShareManager {
 		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "rwx-share-manager-moves")
@@ -186,9 +177,8 @@ func (r *Reconciler) moveDue(v index.Volume) bool {
 		return false
 	}
 
-	// One delete per MaxBorrow. A volume whose replica nodes the scheduler will not take
-	// would otherwise have its share-manager deleted on every pass, which is an outage
-	// loop rather than a fix.
+	// One delete per MaxBorrow, or a volume whose replica nodes the scheduler refuses loses
+	// its share-manager on every pass.
 	if last, ever := r.moved[v.Name]; ever && r.now().Sub(last) < r.Cfg.MaxBorrow {
 		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "rwx-share-manager-moves")
 		return false
@@ -222,15 +212,12 @@ func (r *Reconciler) considerBorrow(ctx context.Context, v index.Volume) {
 		zap.String("restore_to", v.DataLocality))
 }
 
-// borrowable reports whether the volume is one the reconciler may act on at all, before
-// the dwell window is considered.
 func (r *Reconciler) borrowable(ctx context.Context, v index.Volume) bool {
 	if !r.Cfg.FlipDataLocality || v.Restore != "" {
-		return false // already borrowed; Longhorn is mid-rebuild
+		return false // already borrowed, Longhorn is mid-rebuild
 	}
 
-	// Never move an rwx volume. pass routes those to considerShareManagerMove, and copying
-	// a shared volume around would be the exact thing this project exists to avoid.
+	// Never copy an rwx volume. pass moves its share-manager instead.
 	if v.RWX() {
 		return false
 	}
@@ -245,7 +232,7 @@ func (r *Reconciler) borrowable(ctx context.Context, v index.Volume) bool {
 	}
 
 	if v.DataLocality != "disabled" {
-		// Already best-effort or strict-local. Longhorn owns the outcome; nothing to borrow.
+		// Already best-effort or strict-local, so Longhorn owns the outcome.
 		metrics.SetUnfixable(v.Namespace, v.PVCName, v.AccessMode, "longhorn-managed")
 		return false
 	}
@@ -256,11 +243,8 @@ func (r *Reconciler) borrowable(ctx context.Context, v index.Volume) bool {
 	return true
 }
 
-// considerRestore ends a borrow, but only once Longhorn has finished the whole
-// best-effort cycle. It adds the local replica, rebuilds it, and only THEN deletes a
-// remote one to get back to numberOfReplicas. Restoring between those last two steps
-// leaves the volume permanently over-replicated, because a volume on dataLocality
-// disabled gives Longhorn no reason to trim.
+// considerRestore ends a borrow only after Longhorn drops the surplus remote replica. Restoring
+// earlier leaves the volume over-replicated for good, because dataLocality disabled never trims.
 func (r *Reconciler) considerRestore(ctx context.Context, v index.Volume, isLocal bool, have int) {
 	held := time.Duration(0)
 	if started, ok := r.borrowed[v.Name]; ok {
@@ -292,8 +276,8 @@ func (r *Reconciler) considerRestore(ctx context.Context, v index.Volume, isLoca
 		zap.String("value", v.Restore))
 }
 
-// patch sets spec.dataLocality. A non-empty restore parks the previous value in the
-// annotation; an empty one clears it, ending the borrow.
+// patch sets spec.dataLocality. A non-empty restore parks the previous value in the annotation,
+// and an empty one clears it.
 func (r *Reconciler) patch(ctx context.Context, name, locality, restore string) error {
 	ann := map[string]any{r.Cfg.RestoreAnnotation(): nil}
 	if restore != "" {

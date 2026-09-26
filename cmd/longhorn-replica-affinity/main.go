@@ -108,7 +108,6 @@ func clients() (kubernetes.Interface, dynamic.Interface, error) {
 	return kc, dc, nil
 }
 
-// task builds the long-running job the subcommand names.
 func task(cmd string, cfg config.Config, kc kubernetes.Interface, dc dynamic.Interface,
 	idx *index.Index, log *zap.Logger,
 ) (func(context.Context) error, error) {
@@ -128,9 +127,6 @@ func task(cmd string, cfg config.Config, kc kubernetes.Interface, dc dynamic.Int
 	}
 }
 
-// certSource picks where the serving keypair comes from. Self-signed needs no
-// cert-manager: it mints a CA and leaf, parks them in a Secret so every replica agrees,
-// and publishes the CA into the webhook configuration's caBundle.
 func certSource(cfg config.Config, kc kubernetes.Interface, log *zap.Logger) webhook.CertSource {
 	if cfg.TLSMode == config.TLSModeProvided {
 		return func(context.Context) ([]byte, []byte, error) {

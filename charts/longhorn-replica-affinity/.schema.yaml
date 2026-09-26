@@ -1,5 +1,4 @@
 schemaRoot:
   title: longhorn-replica-affinity values
-  # Strict: a typo in a values key is silently ignored otherwise, and this chart's keys all
-  # gate real behaviour.
+  # strict, or a mistyped values key is silently ignored
   additionalProperties: false

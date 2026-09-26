@@ -68,12 +68,8 @@ func (a *Admitter) Review(req *admissionv1.AdmissionRequest) (*admissionv1.Admis
 		return resp, d
 	}
 
-	// A share-manager is itself a pod, so the RWX hop from it to its replicas is fixed by
-	// moving it, not by dragging the volume to it.
-	//
-	// On-disk rather than running: Longhorn stops the engine and every replica before it
-	// recreates the share-manager, so at admission time there is normally no running
-	// replica to prefer. Where the data sits does not change while the process is down.
+	// Moving the share-manager fixes the RWX hop to its replicas. Count replicas on disk:
+	// Longhorn stops every replica before it recreates a share-manager, so none is running yet.
 	if index.IsShareManager(podName(&pod, req)) {
 		d.ShareManager = true
 		nodes := a.Index.ReplicaNodesOnDisk(index.VolumeForShareManager(podName(&pod, req)))

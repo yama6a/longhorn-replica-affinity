@@ -13,8 +13,7 @@ metadata:
     {{- toYaml . | nindent 4 }}
     {{- end }}
 {{- if $selfSigned }}
-  # In self-signed mode the pod writes caBundle itself, so Helm and ArgoCD must not fight it back to empty.
-  # ArgoCD additionally needs an ignoreDifferences entry; see the chart README.
+  # The pod writes caBundle itself in self-signed mode. Argo CD also needs ignoreDifferences, see the README.
 {{- end }}
 webhooks:
   - name: pods.longhorn-replica-affinity.io
@@ -29,8 +28,7 @@ webhooks:
         namespace: {{ .Release.Namespace }}
         path: /mutate
         port: 443
-    # The apiserver never calls this for a pod without the opt-in label, so an un-opted-in workload pays
-    # nothing and cannot be affected by a bug in here.
+    # pods without the opt-in label never reach the webhook, so a bug here cannot touch them
     objectSelector:
       matchLabels:
         {{ .Values.labelKey }}: {{ .Values.labelValue | quote }}
@@ -50,13 +48,8 @@ webhooks:
         resources: ["pods"]
         scope: Namespaced
 {{- if .Values.shareManager.enabled }}
-  # A share-manager is Longhorn's nfs-ganesha pod for one RWX volume, and every consumer
-  # of that volume reads through it. Moving IT onto a node that already holds a replica
-  # removes that hop for all of them, without copying the volume anywhere.
-  #
-  # Deliberately a second entry rather than dropping longhorn-system from the exclusion
-  # above: the objectSelector means the apiserver never calls us for any other Longhorn
-  # pod, so the storage layer's own bootstrap is untouched.
+  # A separate entry, not a hole in the namespace exclusion above: its objectSelector matches only
+  # share-manager pods, so the rest of Longhorn never reaches the webhook.
   - name: sharemanager.longhorn-replica-affinity.io
     admissionReviewVersions: ["v1"]
     sideEffects: None
