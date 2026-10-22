@@ -1,6 +1,6 @@
 # Build on the builder's native arch and cross-compile to the target (buildx supplies
 # TARGETOS/TARGETARCH), so the arm64 image is built without QEMU emulation.
-FROM --platform=$BUILDPLATFORM golang:1.27-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd AS build
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine@sha256:d530cf60723abf1ffae0cd16bb546b379ec0550d2f3815e5b16ed69dbc00fba4 AS build
 ARG TARGETOS TARGETARCH
 ARG VERSION=dev
 
@@ -16,7 +16,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build,id=go-build-$TARGETARCH \
     go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" \
     -o longhorn-replica-affinity ./cmd/longhorn-replica-affinity
 
-FROM gcr.io/distroless/static:nonroot@sha256:516757106de35205efb70b91ba03f6f1298424a0678c603255cf2852a7000087
+FROM gcr.io/distroless/static:nonroot@sha256:d62067879de890a1def9da0e7766b7d20810a5e5555cef8506b752437d7a3e88
 COPY --from=build /app/longhorn-replica-affinity /longhorn-replica-affinity
 USER 65532:65532
 EXPOSE 8443 9100
