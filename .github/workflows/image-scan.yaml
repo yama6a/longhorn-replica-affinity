@@ -1,0 +1,17 @@
+name: image-scan
+
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers] the build runs on push to main only, and the scan checks out main
+    workflows: [release]
+    types: [completed]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  scan:
+    if: github.event.workflow_run.conclusion == 'success'
+    uses: yama6a/gha/.github/workflows/image-scan.yaml@v2
+    permissions:
+      contents: read # reads .trivyignore of a private repo
+      packages: read # pulls a private image
