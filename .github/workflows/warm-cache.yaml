@@ -1,0 +1,23 @@
+name: warm-cache
+
+# A cache written on a PR is restorable only by that same PR, so PRs never share one. A cache
+# written on main is restorable by all of them, which is the only reason this workflow exists.
+# Weekly, because GitHub drops an entry after 7 days without use and the lint cache key rolls over
+# every 7 days. The Go cache compiles only when its exact key is missing.
+on:
+  schedule:
+    - cron: "31 5 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: warm-cache
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    uses: yama6a/gha/.github/workflows/go-ci.yaml@v2
+    with:
+      mode: warm-cache

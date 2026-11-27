@@ -1,0 +1,21 @@
+name: race
+
+# PR runs skip -race to save minutes, so the race tests run here on main once a week.
+# A failed run alerts through gha-status-exporter and Grafana in offgrid-private.
+on:
+  schedule:
+    - cron: "53 4 * * 3"
+  workflow_dispatch:
+
+concurrency:
+  group: race
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    uses: yama6a/gha/.github/workflows/go-ci.yaml@v2
+    with:
+      mode: race
