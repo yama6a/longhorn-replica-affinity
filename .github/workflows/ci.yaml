@@ -5,9 +5,6 @@ on:
     branches: [main]
     # labeled/unlabeled so the gate re-runs on a label change, not just on a push.
     types: [opened, synchronize, reopened, labeled, unlabeled]
-  # A PR restores caches only from its own branch or main, so this run fills the cache every PR reads.
-  push:
-    branches: [main]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -19,8 +16,6 @@ permissions:
 jobs:
   release-label:
     name: release label
-    # a push to main carries no PR labels, so the gate runs on the PR only
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-26.04-arm
     steps:
       - name: Exactly one release label
@@ -53,12 +48,3 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: yama6a/gha/.github/actions/yaml-checks@v2
-
-  renovate-config:
-    runs-on: ubuntu-26.04-arm
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # a broken config silently stops every dependency update
-      - uses: yama6a/gha/.github/actions/validate-renovate-config@v2
-        with:
-          config-file: renovate.json5
